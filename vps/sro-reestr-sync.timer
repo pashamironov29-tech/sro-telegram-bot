@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer: nightly SRO reestr sync (02:00 Europe/Moscow)
+
+[Timer]
+# VPS в UTC → 02:00 МСК = 23:00 UTC предыдущего календарного дня
+OnCalendar=*-*-* 23:00:00 UTC
+Persistent=true
+Unit=sro-reestr-sync.service
+
+[Install]
+WantedBy=timers.target

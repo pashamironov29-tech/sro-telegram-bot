@@ -1,0 +1,11 @@
+[Unit]
+Description=SRO GOLD: check NRS + partner SRO websites
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sro-bot
+ExecStart=/bin/bash /opt/sro-bot/vps/site_health_check.sh
+Nice=10
+TimeoutStartSec=30m

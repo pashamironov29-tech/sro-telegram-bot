@@ -1,0 +1,18 @@
+[Unit]
+Description=Telegram bot SRO GOLD
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=srobot
+Group=srobot
+WorkingDirectory=/opt/sro-bot
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/opt/sro-bot/venv/bin/python -u /opt/sro-bot/bot_FINAL_GOLD.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
