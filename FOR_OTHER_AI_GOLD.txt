@@ -1,0 +1,169 @@
+================================================================================
+GOLD — бриф для другого ИИ (СРО Telegram-бот)
+Дата брифа: 2026-08-04
+Владелец: Паша (куратор / разработка)
+================================================================================
+
+НАЗНАЧЕНИЕ ПРОЕКТА
+------------------
+Telegram-бот для членов и партнёров СРО «ГЕН» (Ассоциация / srogen.ru):
+меню, поиск организации по ИНН/названию, планы проверок, бланки,
+FAQ, ИИ-помощник по разделам сайта, админ-пилот DocQA по документам.
+
+Язык: Python 3. Зависимости: requirements.txt
+  pyTelegramBotAPI, python-docx, requests, pypdf
+
+
+ПУТИ
+----
+Рабочая копия (актуальная):
+  C:\Users\User\OneDrive\Рабочие\GOLD
+
+Данные (планы Word, бланки, docs_qa):
+  C:\Users\User\OneDrive\Рабочие\GOLD\sro files\
+    plany\     — планы проверок .docx
+    blanki\    — бланки по СРО
+    docs_qa\   — тексты для DocQA (grk_rf.txt, положения ОГПС)
+
+Секреты (НЕ коммитить, НЕ светить в чат):
+  config_keys.py
+  Пример без секретов: config_keys.example.py
+  Поля: BOT_TOKEN, SRO_FILES_DIR, GROQ_API_KEY, OPENROUTER_API_KEY,
+        OPENROUTER_MODEL, CONTACTS_PASSWORD, BOT_ADMIN_IDS (если есть)
+
+
+БЭКАП (локально, НЕ в OneDrive)
+------------------------------
+Запуск бэкапа:
+  C:\BACKUP_WORK\START_BACKUP.bat
+  (внутри: BACKUP_WORK.ps1)
+
+Куда складывает:
+  C:\BACKUP_WORK\LATEST              — последний снимок
+  C:\BACKUP_WORK\YYYY-MM-DD_HH-MM\   — архивные снимки (ротация ~7 шт.)
+  C:\BACKUP_WORK\README.txt          — инструкция
+  C:\BACKUP_WORK\logs\               — логи бэкапа
+
+Что входит в бэкап (по README):
+  GOLD, MANICURE-BOT, BANI-VIKINGI, BOT-UCHENIE, srogen-site-concept,
+  Планы_проверок_2026_Word
+  (ищет в OneDrive\Рабочие, потом на Desktop)
+
+На 2026-08-04 вечером уже есть снимок: 2026-08-04_22-20 и LATEST.
+
+Перед крупными правками кода — сначала START_BACKUP.bat.
+
+
+PRODUCTION (VPS)
+----------------
+Бот в Telegram крутится на сервере, НЕ на ПК Паши (иначе конфликт токена 409).
+
+  IP:      147.45.225.70 (Timeweb)
+  Каталог: /opt/sro-bot
+  Данные:  /opt/sro-bot/sro_data  (SRO_FILES_DIR на Linux)
+  DocsQA:  /opt/sro-bot/sro files/docs_qa/  (там же grk_rf.txt + положения)
+  Сервис:  sro-bot.service (systemd)
+  Секреты: /opt/sro-bot/config_keys.py  — НЕ перезаписывать с Windows
+
+Статус / логи: см. VPS_5_MIN_CHECK.md в корне GOLD.
+
+Деплой с Windows (коротко):
+  cd "C:\Users\User\OneDrive\Рабочие\GOLD"
+  scp нужные .py на root@147.45.225.70:/opt/sro-bot/
+  ssh ... "systemctl restart sro-bot && systemctl is-active sro-bot"
+  Полная выгрузка: .\vps\upload_to_vps.ps1 -VpsIp "147.45.225.70"
+  (скрипт НЕ заливает config_keys.py)
+
+Локальный запуск бота — ТОЛЬКО если Паша явно сказал «локально» / «на этом ПК».
+
+
+ГЛАВНЫЕ ФАЙЛЫ КОДА
+------------------
+bot_FINAL_GOLD.py     — точка входа, меню, хендлеры Telegram
+ai_assistant.py       — ИИ: маршрут по разделам сайта (OpenRouter → запас Groq)
+doc_qa.py             — админ DocQA: ГрК + положения ОГПС (поиск кусков + ИИ)
+reestr_sync.py        — синхронизация реестров 15 СРО → reestr_cache.json
+voprosy_faq.py        — FAQ
+sro_context.py        — контекст / общие тексты
+sro_profiles.py       — профили СРО
+blanki_sro.py         — ключи бланков
+info_list_fill.py     — автозаполнение инфолиста / заявления на проверку
+contacts_*.py         — справочник контактов (с паролем)
+plan_month_check.py   — проверка месячного плана (исключения, проверки, задвоения)
+export_month_plans_docx.py — Word планов месяца
+users_log.py / feedback_log.py — журналы
+prevent_sleep.py      — антисон ПК (локально)
+vps\                  — деплой, install, smoke-тесты
+
+Кэш реестра (тяжёлый):
+  reestr_cache.json   (~18k организаций) — на VPS тоже нужен
+
+
+DOCQA (пилот, только админ)
+---------------------------
+Модуль: doc_qa.py
+Кнопка: «📕 Документы (админ)»
+Документы в docs_qa/:
+  grk_rf.txt
+  polozhenie_kontrol_ogps.txt
+  polozhenie_kk_ogps.txt
+Сокращения в вопросе: кк→контрольный комитет, грк→ГрК, пк→положение о контроле
+После ответа — подсказка уточнить документ, если не то.
+
+
+ИИ / КЛЮЧИ
+----------
+Основной: OpenRouter (OPENROUTER_API_KEY, OPENROUTER_MODEL)
+  На VPS часто openai/gpt-4.1; локально в example может быть gpt-4.1 / mini
+Запас: Groq
+С домашнего ПК OpenRouter иногда режет Cloudflare (403 security policy);
+  на VPS обычно ок. Для чата на ПК — VPN или прямой DeepSeek; для бота — VPS.
+
+
+ПРАВИЛА ДЛЯ ИИ-ПОМОЩНИКА
+------------------------
+1. Не запускать бота локально без явной просьбы («локально»).
+2. Не заливать Windows config_keys.py на VPS.
+3. Не начинать MAX messenger / новости ИИ / массовую загрузку положений —
+   пока Паша явно не сказал.
+4. Бани (BANI-VIKINGI) и маникюр — на паузе.
+5. Учёба Python — отдельный проект BOT-UCHENIE (не путать с GOLD).
+6. Коммиты / push — только по просьбе Паши.
+7. После правок кода бота — деплой на VPS + restart sro-bot.
+
+
+СМЕЖНЫЕ ПРОЕКТЫ (не смешивать)
+------------------------------
+Учёба:     C:\Users\User\OneDrive\Рабочие\BOT-UCHENIE
+Макет сайта: C:\Users\User\OneDrive\Рабочие\srogen-site-concept\
+MC:        C:\Users\User\OneDrive\Рабочие\MC-SERVER
+Бани:      на паузе (Desktop\BANI-VIKINGI)
+
+
+ДОКУМЕНТЫ В GOLD ДЛЯ КОНТЕКСТА
+------------------------------
+VPS_5_MIN_CHECK.md, VPS_SETUP.md, IT_ZAYAVKA_DEPLOY.md
+PROVERKA_PLANOV.md, DLYA_RUKOVODSTVA_BOTA.md
+.cursor\rules\*.mdc — операционные правила Cursor
+
+
+КАК РАБОТАТЬ С КОДОМ
+--------------------
+Читать и править файлы из:
+  C:\Users\User\OneDrive\Рабочие\GOLD
+Не копировать сюда весь bot_FINAL_GOLD.py в чат без нужды — файл большой.
+Точечные правки + деплой изменённых .py на VPS.
+
+Перед крупным рефакторингом:
+  C:\BACKUP_WORK\START_BACKUP.bat
+  проверить C:\BACKUP_WORK\LATEST
+
+
+ЧТО НЕ КЛАСТЬ В ЧАТ ДРУГОМУ ИИ
+------------------------------
+BOT_TOKEN, OPENROUTER_API_KEY, GROQ_API_KEY, CONTACTS_PASSWORD,
+полные логи с токенами, чужие персональные данные из contacts.
+
+================================================================================
+Конец брифа. При необходимости приложите конкретные .py файлы к запросу.
+================================================================================

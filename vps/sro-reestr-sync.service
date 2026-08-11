@@ -1,0 +1,12 @@
+[Unit]
+Description=SRO GOLD nightly reestr sync (list + refresh inspections)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sro-bot
+ExecStart=/bin/bash /opt/sro-bot/vps/reestr_daily_sync.sh
+Nice=10
+# Может идти несколько часов
+TimeoutStartSec=6h

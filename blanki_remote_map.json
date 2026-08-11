@@ -1,0 +1,167 @@
+{
+  "OGPS": {
+    "_page": "https://www.srogen.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://www.srogen.ru",
+    "doverennost": "/upload/files/documents/2025/dov_ogps_18022025.doc",
+    "info_list": "/upload/files/documents/2025/inf_list_18022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_ogps_18022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_ogps_18022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_ogps_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_ogps_18022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_ogps_18022025.doc"
+  },
+  "MOTS": {
+    "_page": "https://www.sro-mots.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://www.sro-mots.ru",
+    "doverennost": "/upload/files/documents/2025/dov_mots_18022025.doc",
+    "info_list": "/upload/files/documents/2025/inf_list_mots_18022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_mots_18022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_mots_18022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_mots_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_mots_18022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_mots_18022025.doc"
+  },
+  "OGPP": {
+    "_page": "https://www.srosp.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://www.srosp.ru",
+    "doverennost": "/upload/files/documents/2025/dov_ogpp_18022025.doc",
+    "info_list": "/upload/files/documents/2025/inf_list_ogpp_18022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_ogpp_18022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_ogpp_18022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_ogpp_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_ogpp_18022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_ogpp_18022025.doc"
+  },
+  "OSO": {
+    "_page": "https://srooso.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://srooso.ru",
+    "doverennost": "/upload/files/documents/2025/dov_oso_18022025.doc",
+    "info_list": "/upload/files/documents/2025/inf_list_oso_18022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_oso_18022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_oso_18022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_oso_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_oso_18022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_oso_18022025.doc"
+  },
+  "SPROF": {
+    "_page": "https://sprofproekt.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://sprofproekt.ru",
+    "doverennost": "/upload/files/documents/2025/dov_spr_28022025.doc",
+    "info_list": "/upload/files/documents/2025/list_spr_28022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_spr_28022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_spr_28022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_spr_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_spr_28022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_spr_28022025.doc"
+  },
+  "PRIIS": {
+    "_page": "https://sro-priis.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://sro-priis.ru",
+    "doverennost": "/upload/files/documents/2025/dov_priis_28022025.doc",
+    "info_list": "/upload/files/documents/2025/list_priis_28022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_priis_28022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_priis_28022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_priis_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_priis_28022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_priis_28022025.doc"
+  },
+  "OPP": {
+    "_page": "https://np-pspz.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://np-pspz.ru",
+    "doverennost": "/upload/files/documents/2025/dov_opp_28022025.doc",
+    "info_list": "/upload/files/documents/2025/list_opp_28022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_opp_28022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_opp_28022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_opp_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_opp_28022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_opp_28022025.doc"
+  },
+  "NOSO": {
+    "_page": "https://www.sronoso.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://www.sronoso.ru",
+    "doverennost": "/upload/files/documents/2025/dov_noso_18022025.doc",
+    "info_list": "/upload/files/documents/2025/inf_list_noso_18022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_noso_18022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_noso_18022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_noso_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_noso_18022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_noso_18022025.doc"
+  },
+  "OSOES": {
+    "_page": "https://assrtm.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://assrtm.ru",
+    "doverennost": "/upload/files/documents/2025/dov_osoes_18022025.doc",
+    "info_list": "/upload/files/documents/2025/inf_list_osoes_18022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_osoes_18022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_osoes_18022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_osoes_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_osoes_18022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_osoes_18022025.doc"
+  },
+  "OSOT": {
+    "_page": "https://nup-sro.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://nup-sro.ru",
+    "doverennost": "/upload/files/documents/2025/dov_osot_18022025.doc",
+    "info_list": "/upload/files/documents/2025/inf_list_osot_18022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_osot_2023_18022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_osot_18022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_osot_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_osot_18022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_osot_30062022_18022025.doc"
+  },
+  "SOVS": {
+    "_page": "https://www.msro-sibir.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://www.msro-sibir.ru",
+    "doverennost": "/upload/files/documents/2025/dov_osovs_18022025.doc",
+    "info_list": "/upload/files/documents/2025/inf_list_osovs_18022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_osovs_18022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_osovs_18022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_osovs_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_osovs_18022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_osovs_18022025.doc"
+  },
+  "OGPO": {
+    "_page": "https://sroogpo.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://sroogpo.ru",
+    "doverennost": "/upload/files/documents/2025/dov_ogpo_18022025.doc",
+    "info_list": "/upload/files/documents/2025/inf_list_ogpo_18022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_ogpo_18022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_ogpо_18022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_ogpo_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_ogpo_18022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_ogpo_18022025.doc"
+  },
+  "MGEO": {
+    "_page": "https://sroigeo.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://sroigeo.ru",
+    "doverennost": "/upload/files/documents/2025/dov_mgeo_28022025.doc",
+    "info_list": "/upload/files/documents/2025/list_mgeo_28022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_mgeo_28022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_mgeo_28022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_mgeo_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_mgeo_28022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_mgeo_28022025.doc"
+  },
+  "GEOIND": {
+    "_page": "https://www.srogeo.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://www.srogeo.ru",
+    "doverennost": "/upload/files/documents/2025/dov_geo_28022025.doc",
+    "info_list": "/upload/files/documents/2025/list_geo_28022025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_geo_28022025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_geo_28022025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_geoind_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_geo_28022025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_geo_28022025.doc"
+  },
+  "GPS": {
+    "_page": "https://sro-gps.ru/kontrol_sro/kontrolniy_komitet/perechen_documentov/",
+    "_base": "https://sro-gps.ru",
+    "doverennost": "/upload/files/documents/2025/dov_gps_2025.doc",
+    "info_list": "/upload/files/documents/2025/inf_list_gps_2025.doc",
+    "zayavlenie_izmeneniya": "/upload/files/documents/2025/izm_gps_2025.docx",
+    "svedeniya_spec": "/upload/files/documents/2025/sved_gps_2025.docx",
+    "uvedomlenie_odo": "/upload/files/news/uvedomlenie_gps_2026.docx",
+    "zayavlenie_proverka": "/upload/files/documents/2025/zayavlenie_gps_2025.docx",
+    "polozhenie_kontrol": "/upload/files/documents/2025/kontrol_gps.doc"
+  }
+}

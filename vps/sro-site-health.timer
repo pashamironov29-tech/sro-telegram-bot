@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer: daily SRO/NRS site health check (08:00 Europe/Moscow)
+
+[Timer]
+# 08:00 МСК = 05:00 UTC
+OnCalendar=*-*-* 05:00:00 UTC
+Persistent=true
+Unit=sro-site-health.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,73 @@
+# === Секреты и локальные ключи — НИКОГДА в git ===
+config_keys.py
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# Одноразовые VPS-скрипты с ключами (если появятся снова)
+vps/*_once*
+vps/or_key*
+vps/gc_cred*
+
+# === Данные бота / ПДн / кэши ===
+bot_users.json
+user_sro_context.json
+contacts_access.json
+feedback_questions.jsonl
+nrs_link_mode.json
+reestr_cache.json
+reestr_*.log
+*_cache*.json
+september_*.json
+
+# === Логи ===
+*.log
+bot_errors.log
+bot_run.log
+
+# === Тяжёлые / внутренние материалы СРО (бланки, PDF, сырые доки) ===
+sro files/
+grkodeksrf.pdf
+*.docx
+!**/README*.md
+
+# === Личное / не для витрины ===
+MOI_IDEI.md
+IDEI.md
+IDEI_INBOX.md
+PAASHA_IDEAS_INBOX.md
+DNEVNIK_MEMUAR.md
+HH_REZUME.md
+HH_SOBES_SHPARGALKA.md
+FL_OTKLIK.md
+.portfolios/
+.cursor/
+
+# === Временное / отладка ===
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+_find_*.txt
+_c_*.txt
+_test_*
+practice_bug_local.py
+practice_bug.local.py
+FOR_AI_REVIEW_ONE_FILE.txt
+_word_sample/
+
+# === IDE / ОС ===
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Крупные картинки объявлений (по желанию можно вернуть) ===
+avito_cover_v2.png
+kwork_cover_v2.png
