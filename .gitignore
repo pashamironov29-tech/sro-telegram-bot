@@ -47,6 +47,28 @@ FL_OTKLIK.md
 .portfolios/
 .cursor/
 
+# === Фриланс (Авито/Kwork) — канон в папке AVITO, не в GOLD ===
+AVITO_*.md
+KWORK_*.md
+PORTFOLIO_*.md
+kwork_avatar.png
+_make_kwork_cover.py
+
+# === Внутренние отчёты и черновики (локально ок, в GitHub нет) ===
+OTCHET_*.md
+FOR_OTHER_AI*.txt
+IT_ZAYAVKA_DEPLOY.md
+KURATOR_BOT_ROL.md
+BOT_PROFILE.txt
+PRACTICE_*.md
+practice_bug*.py
+build_otchet_*.py
+export_boss_ask_memo.py
+export_demo_test_journal.py
+export_moscow_pdn_docs.py
+export_pdn_legal_report_docx.py
+photo_2026-07-26_00-04-45.jpg
+
 # === Временное / отладка ===
 __pycache__/
 *.py[cod]
