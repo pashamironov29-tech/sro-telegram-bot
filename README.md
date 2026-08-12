@@ -45,7 +45,7 @@ python bot_FINAL_GOLD.py
 
 ## Деплой
 
-Краткие заметки: `VPS_SETUP.md`, `VPS_SECURITY.md`, `IT_ZAYAVKA_DEPLOY.md`.
+Краткие заметки: `VPS_SETUP.md`, `VPS_SECURITY.md`, `VPS_5_MIN_CHECK.md`.
 
 ## Автор
 
