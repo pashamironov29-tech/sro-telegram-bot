@@ -43,9 +43,19 @@ python bot_FINAL_GOLD.py
 | `sro files/` | бланки и внутренние PDF |
 | логи, `bot_users.json` | эксплуатационные данные |
 
+## Структура репозитория
+
+| Папка | Содержимое |
+|-------|------------|
+| корень | runtime-код бота (`bot_FINAL_GOLD.py`, модули), `requirements.txt` |
+| `docs/` | инструкции, презентация, VPS-заметки, история версий |
+| `scripts/` | офлайн-утилиты (планы месяца, экспорт Word, sync бланков) |
+| `assets/` | аватар бота |
+| `vps/` | systemd, install, upload |
+
 ## Деплой
 
-Краткие заметки: `VPS_SETUP.md`, `VPS_SECURITY.md`, `VPS_5_MIN_CHECK.md`.
+Краткие заметки: `docs/VPS_SETUP.md`, `docs/VPS_SECURITY.md`, `docs/VPS_5_MIN_CHECK.md`.
 
 ## Автор
 

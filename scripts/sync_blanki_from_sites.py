@@ -1,8 +1,8 @@
 """
 Скачать бланки контроля с сайтов всех 15 СРО в sro files/blanki/<ID>/.
 
-Карта URL: blanki_remote_map.json (обновить: py discover_blanki_urls.py)
-Запуск: py sync_blanki_from_sites.py
+Карта URL: blanki_remote_map.json (обновить: py scripts/discover_blanki_urls.py)
+Запуск: py scripts/sync_blanki_from_sites.py
 """
 
 from __future__ import annotations
@@ -12,11 +12,14 @@ import os
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import requests
 
 from blanki_sro import BLANKI_FILES, BLANKI_SRO_IDS
 
-ROOT = Path(__file__).resolve().parent
 MAP_FILE = ROOT / "blanki_remote_map.json"
 
 
