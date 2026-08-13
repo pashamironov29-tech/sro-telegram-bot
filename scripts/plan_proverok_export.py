@@ -6,16 +6,21 @@
 Формат как в официальных plan_proverok_*.doc: УТВЕРЖДЕНО + таблица с блоками месяцев.
 
 Запуск:
-  py plan_proverok_export.py
-  py plan_proverok_export.py --xlsx "C:\\path\\file.xlsx" --out "C:\\path\\out"
+  py scripts/plan_proverok_export.py
+  py scripts/plan_proverok_export.py --xlsx "C:\\path\\file.xlsx" --out "C:\\path\\out"
 """
 from __future__ import annotations
 
 import argparse
 import re
+import sys
 import zipfile
 from collections import defaultdict
 from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import openpyxl
 from openpyxl.xml.functions import fromstring

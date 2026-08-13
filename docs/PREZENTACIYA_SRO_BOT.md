@@ -215,7 +215,7 @@ Telegram-бот — это **цифровая витрина Ассоциаци�
 | **Секреты** | Токен бота, Groq, пароль контактов — в `config_keys.py`, не в коде |
 | **Обновление реестра** | Скрипт `reestr_sync.py` → `reestr_cache.json` |
 | **Планы проверок** | Word-файлы в `plany/` — подхватываются при запуске |
-| **VPS** | Готовы `VPS_SETUP.md`, `vps/install.sh`, systemd-сервис — перенос «24/7 на сервер» |
+| **VPS** | Готовы `docs/VPS_SETUP.md`, `vps/install.sh`, systemd-сервис — перенос «24/7 на сервер» |
 
 **Запуск на Windows (офис / демо):** `START_BOT.bat` / `STOP_BOT.bat` — один процесс на один токен BotFather.
 

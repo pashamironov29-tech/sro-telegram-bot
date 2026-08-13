@@ -91,13 +91,13 @@ cd "C:\Users\User\OneDrive\Рабочие\GOLD"
 $env:PYTHONIOENCODING="utf-8"
 
 # Шаг 1: реестр + live-карточки → JSON с отметками
-py plan_month_check.py --month октябрь --skip-sro ОСОВС,ОСОТ,НОСО,ОСОЕС --live --out plan_check_октябрь_flagged.json
+py scripts/plan_month_check.py --month октябрь --skip-sro ОСОВС,ОСОТ,НОСО,ОСОЕС --live --out plan_check_октябрь_flagged.json
 
 # Шаг 2: Word по СРО (УТВЕРЖДАЮ, автонумерация, подсветка)
-py export_month_plans_docx.py --month октябрь --skip-sro ОСОВС,ОСОТ,НОСО,ОСОЕС --flagged plan_check_октябрь_flagged.json --out "C:\Users\User\Desktop\Планы_октябрь_2026_Word_утв"
+py scripts/export_month_plans_docx.py --month октябрь --skip-sro ОСОВС,ОСОТ,НОСО,ОСОЕС --flagged plan_check_октябрь_flagged.json --out "C:\Users\User\Desktop\Планы_октябрь_2026_Word_утв"
 ```
 
-По умолчанию `plan_month_check.py` **сначала** обновляет реестр list-only (~30–40 мин), потом при `--live` качает карточки (~40–45 мин).  
+По умолчанию `scripts/plan_month_check.py` **сначала** обновляет реестр list-only (~30–40 мин), потом при `--live` качает карточки (~40–45 мин).  
 `--no-fresh-reestr` — только если list-only всех 15 СРО уже в этот же день.
 
 Результаты:
@@ -120,4 +120,4 @@ py export_month_plans_docx.py --month октябрь --skip-sro ОСОВС,ОС�
 
 ## Связь с ботом
 
-При старте `bot_FINAL_GOLD.py` тоже читает `plany/*.docx` в память (`sro_database`) — для карточки «план проверки» по ИНН. Проверка месяца перед публикацией — **отдельная задача**, этот документ и `plan_month_check.py`.
+При старте `bot_FINAL_GOLD.py` тоже читает `plany/*.docx` в память (`sro_database`) — для карточки «план проверки» по ИНН. Проверка месяца перед публикацией — **отдельная задача**, этот документ и `scripts/plan_month_check.py`.

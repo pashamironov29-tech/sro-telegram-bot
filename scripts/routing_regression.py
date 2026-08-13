@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 Локальная регрессия маршрутизации (без Telegram).
-Запуск из папки GOLD:  python routing_regression.py
+Запуск из папки GOLD:  python scripts/routing_regression.py
 """
 
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from ai_assistant import local_ai_route_kind, match_topic_local, should_route_to_ai
 from contacts_search import looks_like_directory_person_query, should_global_directory_intercept

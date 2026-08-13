@@ -8,8 +8,8 @@
 чтобы статусы «Исключен» не были из устаревшего кэша.
 
 Пример:
-  py plan_month_check.py --month сентябрь --skip-sro ОСОВС,ОСОТ,НОСО,ОСОЕС --live
-  py plan_month_check.py --month сентябрь --no-fresh-reestr   # только если кэш уже свежий
+  py scripts/plan_month_check.py --month сентябрь --skip-sro ОСОВС,ОСОТ,НОСО,ОСОЕС --live
+  py scripts/plan_month_check.py --month сентябрь --no-fresh-reestr   # только если кэш уже свежий
 """
 
 from __future__ import annotations
@@ -17,9 +17,14 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 import time
 from collections import Counter
 from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from docx import Document
 

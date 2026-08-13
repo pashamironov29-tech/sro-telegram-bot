@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+import sys
+from pathlib import Path
 from urllib.parse import urljoin, urlparse
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import requests
 
@@ -77,9 +83,7 @@ def main() -> None:
         keys = [k for k in result[sro_id] if not k.startswith("_")]
         print(sro_id, len(keys), "files", result[sro_id].get("_error", ""))
 
-    from pathlib import Path
-
-    path = Path(__file__).with_name("blanki_remote_map.json")
+    path = _ROOT / "blanki_remote_map.json"
     with path.open("w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
     print("written", path)
