@@ -306,7 +306,7 @@ def _nopriz_api(
                 "Referer": NOPRIZ_NRS,
                 "Origin": "https://nrs.nopriz.ru",
             },
-            timeout=20,
+            timeout=10,
         )
         r.raise_for_status()
         payload = r.json().get("data") or {}

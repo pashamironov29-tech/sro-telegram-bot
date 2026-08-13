@@ -259,7 +259,8 @@ def notify_admins_about_error(func_name: str, event, exc: BaseException) -> bool
     else:
         full = ""
 
-    sig = f"{func_name}:{type(exc).__name__}:{str(exc)[:120]}"
+    exc_text = _redact_secrets(str(exc))
+    sig = f"{func_name}:{type(exc).__name__}:{exc_text[:120]}"
     now = time.monotonic()
     last = _last_admin_error_alert.get(sig, 0.0)
     if now - last < _ADMIN_ERROR_COOLDOWN_SEC:
@@ -267,6 +268,7 @@ def notify_admins_about_error(func_name: str, event, exc: BaseException) -> bool
     _last_admin_error_alert[sig] = now
 
     tb_short = "".join(tb_mod.format_exception(type(exc), exc, exc.__traceback__))
+    tb_short = _redact_secrets(tb_short)
     if len(tb_short) > 1800:
         tb_short = "…\n" + tb_short[-1800:]
 
@@ -280,7 +282,7 @@ def notify_admins_about_error(func_name: str, event, exc: BaseException) -> bool
         f"chat_id: <code>{chat_id}</code>\n"
         f"Нажал / написал:\n<code>{html_lib.escape(action[:500])}</code>\n\n"
         f"<b>{html_lib.escape(type(exc).__name__)}</b>: "
-        f"{html_lib.escape(str(exc)[:400])}\n\n"
+        f"{html_lib.escape(exc_text[:400])}\n\n"
         f"<pre>{html_lib.escape(tb_short)}</pre>"
     )
     if len(body) > 4000:
@@ -303,7 +305,10 @@ def log_errors(func):
             return func(event, *args, **kwargs)
         except Exception as e:
             logging.error("Ошибка в функции %s", func.__name__, exc_info=True)
-            print(f"⚠️ Ошибка в {func.__name__}: {type(e).__name__}: {e}", flush=True)
+            print(
+                f"⚠️ Ошибка в {func.__name__}: {type(e).__name__}: {_redact_secrets(str(e))}",
+                flush=True,
+            )
             notified = False
             try:
                 notified = notify_admins_about_error(func.__name__, event, e)
@@ -332,6 +337,13 @@ def log_errors(func):
     return wrapper
 
 
+def _redact_secrets(text: str) -> str:
+    """Убрать токен бота из логов и алертов."""
+    text = re.sub(r"/bot\d+:[A-Za-z0-9_-]+/", "/bot***REDACTED***/", text)
+    text = re.sub(r"bot\d+:[A-Za-z0-9_-]{20,}", "bot***REDACTED***", text)
+    return text
+
+
 def _is_tg_transient(exc: BaseException) -> bool:
     name = type(exc).__name__
     msg = str(exc).lower()
@@ -345,7 +357,7 @@ def _is_tg_transient(exc: BaseException) -> bool:
     )
 
 
-def safe_send_message(chat_id, text, *, retries: int = 3, **kwargs):
+def safe_send_message(chat_id, text, *, retries: int = 5, **kwargs):
     """send_message с повтором при обрывах до api.telegram.org."""
     last_exc: BaseException | None = None
     parse_mode = kwargs.get("parse_mode")
@@ -361,9 +373,31 @@ def safe_send_message(chat_id, text, *, retries: int = 3, **kwargs):
                 parse_mode = None
                 continue
             if attempt < retries - 1 and _is_tg_transient(exc):
-                import time
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            break
+    if last_exc:
+        raise last_exc
+    return None
 
-                time.sleep(0.5 * (attempt + 1))
+
+def safe_edit_message_text(chat_id, message_id, text, *, retries: int = 5, **kwargs):
+    last_exc: BaseException | None = None
+    parse_mode = kwargs.get("parse_mode")
+    for attempt in range(max(1, retries)):
+        try:
+            return bot.edit_message_text(
+                text, chat_id, message_id, **kwargs
+            )
+        except Exception as exc:
+            last_exc = exc
+            if parse_mode and attempt == 0 and not _is_tg_transient(exc):
+                kwargs = dict(kwargs)
+                kwargs.pop("parse_mode", None)
+                parse_mode = None
+                continue
+            if attempt < retries - 1 and _is_tg_transient(exc):
+                time.sleep(0.8 * (attempt + 1))
                 continue
             break
     if last_exc:
@@ -385,6 +419,52 @@ def safe_answer_callback(call_id, text: str | None = None, **kwargs) -> None:
 # Теперь в этом файле нет секретных данных! Его можно смело показывать всем.
 
 sro_database = {}
+
+
+def _looks_like_address(text: str) -> bool:
+    """Адрес / индекс вместо названия организации (как в кривых строках плана)."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if re.match(r"^\d{6}\b", t):
+        return True
+    low = t.lower()
+    if re.search(r"\b\d{6}\b", t) and any(
+        x in low for x in ("ул.", "ул ", "дом ", "д.", "пом", "г.", "пр-т", "проспект")
+    ):
+        return True
+    if "ул." in low and ("дом " in low or "д." in low or "пом" in low):
+        return True
+    return False
+
+
+def _name_from_plan_row_cells(cells_text: list[str], inn: str, inn_index: int) -> str:
+    """Собрать название из ячеек до ИНН; адрес не брать."""
+    before = [
+        t
+        for t in cells_text[:inn_index]
+        if t.replace(" ", "").replace("\xa0", "") != inn
+        and not t.replace(" ", "").replace("\xa0", "").isdigit()
+        and not _looks_like_address(t)
+    ]
+    if before:
+        # «ООО» + «ПБС» → «ООО ПБС»; иначе самое длинное осмысленное
+        if len(before) >= 2 and all(len(t) <= 20 for t in before):
+            return " ".join(before)
+        return max(before, key=len)
+
+    after = [
+        t
+        for t in cells_text
+        if t.replace(" ", "").replace("\xa0", "") != inn
+        and not t.replace(" ", "").replace("\xa0", "").isdigit()
+        and len(t) > 2
+        and not _looks_like_address(t)
+    ]
+    if after:
+        return max(after, key=len)
+    return "Организация СРО"
+
 
 # Бот автоматически берет скрытый путь из файла secrets.py
 folder_path = SRO_FILES_DIR
@@ -432,18 +512,14 @@ try:
                             break
                     
                     if inn:
-                        name = "Организация СРО"
-                        potential_names = [t for t in cells_text[:inn_index] if not t.replace(" ", "").isdigit() and len(t) > 3]
-                        if potential_names:
-                            name = max(potential_names, key=len)
-                        else:
-                            all_texts = [t for t in cells_text if t.replace(" ","").replace("\xa0", "") != inn and not t.replace(" ", "").isdigit() and len(t) > 3]
-                            if all_texts:
-                                name = all_texts[0] # Добавили, чтобы убрать квадратные скобки и адрес!
+                        name = _name_from_plan_row_cells(cells_text, inn, inn_index)
 
                            # УМНАЯ СКЛЕЙКА ДЛЯ ОРГАНИЗАЦИЙ В НЕСКОЛЬКИХ СРО
                         if inn in sro_database:
-                            if sro_database[inn]["name"][0].isdigit() and not name[0].isdigit():
+                            old = sro_database[inn]["name"]
+                            if _looks_like_address(old) and not _looks_like_address(name):
+                                sro_database[inn]["name"] = name
+                            elif old[0].isdigit() and name and not name[0].isdigit():
                                 sro_database[inn]["name"] = name
                             plans = sro_database[inn].setdefault("plans", {})
                             if sro_key not in plans:
@@ -578,10 +654,15 @@ def handle_universal_search(chat_id: int, user_text: str) -> bool:
         return True
 
     query = user_text.strip()
-    if len(query) < 2:
-        bot.send_message(
+    if len(query) < NAME_SEARCH_MIN_LEN:
+        safe_send_message(
             chat_id,
-            "Введите ИНН (9–12 цифр) или минимум 2 символа названия организации.",
+            (
+                f"Введите <b>ИНН</b> (9–12 цифр) или минимум "
+                f"<b>{NAME_SEARCH_MIN_LEN} символа</b> названия "
+                "(например «белг», «ПБС»). Короткие запросы вроде «гос» дают слишком много совпадений."
+            ),
+            parse_mode="HTML",
         )
         return True
 
@@ -595,7 +676,17 @@ def handle_universal_search(chat_id: int, user_text: str) -> bool:
 def handle_org_name_search(chat_id: int, user_text: str, *, force: bool = False) -> bool:
     """Поиск по названию. True — запрос обработан (найдено или «не найдено»)."""
     query = user_text.replace('"', "").replace("«", "").replace("»", "").lower().strip()
-    if len(query) < 2:
+    if len(query) < NAME_SEARCH_MIN_LEN:
+        if force:
+            safe_send_message(
+                chat_id,
+                (
+                    f"Для поиска по названию нужно минимум <b>{NAME_SEARCH_MIN_LEN} символа</b>.\n"
+                    "Или введите <b>ИНН</b> (9–12 цифр)."
+                ),
+                parse_mode="HTML",
+            )
+            return True
         return False
 
     results = search_companies_by_name(query)
@@ -611,17 +702,39 @@ def handle_org_name_search(chat_id: int, user_text: str, *, force: bool = False)
         return bool(outcome)
 
     if len(results) > 1:
+        if len(results) > NAME_SEARCH_TOO_MANY:
+            safe_send_message(
+                chat_id,
+                (
+                    f"🔍 По запросу «<b>{user_text}</b>» слишком много совпадений"
+                    f" (больше {NAME_SEARCH_TOO_MANY}).\n\n"
+                    "Уточните название или введите <b>ИНН</b>."
+                ),
+                parse_mode="HTML",
+            )
+            return True
+
         inline_markup = types.InlineKeyboardMarkup()
-        for inn, name in results[:10]:
-            btn = types.InlineKeyboardButton(text=f"🏢 {name}", callback_data=f"search_inn:{inn}")
+        for inn, name in results[:NAME_SEARCH_LIST_MAX]:
+            label = f"🏢 {name}"
+            if len(label) > 60:
+                label = label[:57] + "…"
+            btn = types.InlineKeyboardButton(
+                text=label, callback_data=f"search_inn:{inn}"
+            )
             inline_markup.add(btn)
         response_text = (
             f"🔍 По запросу «<b>{user_text}</b>» найдено организаций: {len(results)}\n"
             "<i>Выберите нужную компанию из списка ниже или уточните название:</i>"
         )
-        if len(results) > 10:
-            response_text += "\n\n⚠️ <i>Показаны первые 10. Уточните название для более точного поиска.</i>"
-        bot.send_message(chat_id, response_text, parse_mode="HTML", reply_markup=inline_markup)
+        if len(results) > NAME_SEARCH_LIST_MAX:
+            response_text += (
+                f"\n\n⚠️ <i>Показаны первые {NAME_SEARCH_LIST_MAX}. "
+                "Уточните название для более точного поиска.</i>"
+            )
+        safe_send_message(
+            chat_id, response_text, parse_mode="HTML", reply_markup=inline_markup
+        )
         return True
 
     if force or looks_like_org_name_query(user_text):
@@ -772,7 +885,7 @@ def present_found_organization(chat_id: int, inn: str, reply_markup=None) -> str
         # Пока висит развилка — универсальный поиск остаётся активным.
         enter_search_mode(chat_id)
         if in_reestr:
-            bot.send_message(
+            safe_send_message(
                 chat_id,
                 f"Организация найдена (ИНН <code>{clean}</code>).\n\n"
                 "<b>Где смотреть?</b>\n"
@@ -781,7 +894,7 @@ def present_found_organization(chat_id: int, inn: str, reply_markup=None) -> str
                 reply_markup=get_checko_fork_keyboard(clean, in_reestr=True),
             )
             return "fork"
-        bot.send_message(
+        safe_send_message(
             chat_id,
             f"ИНН <code>{clean}</code> в реестре 15 СРО не найден.\n"
             "Можно открыть <b>полную информацию</b> (Checko).\n"
@@ -800,10 +913,10 @@ def present_found_organization(chat_id: int, inn: str, reply_markup=None) -> str
 def _deliver_company_card(chat_id: int, text: str, reply_markup=None, loading_msg=None) -> None:
     if loading_msg:
         try:
-            bot.edit_message_text(
-                text,
+            safe_edit_message_text(
                 chat_id,
                 loading_msg.message_id,
+                text,
                 parse_mode="HTML",
                 reply_markup=reply_markup,
             )
@@ -813,7 +926,7 @@ def _deliver_company_card(chat_id: int, text: str, reply_markup=None, loading_ms
                 bot.delete_message(chat_id, loading_msg.message_id)
             except Exception:
                 pass
-    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=reply_markup)
+    safe_send_message(chat_id, text, parse_mode="HTML", reply_markup=reply_markup)
 
 
 def send_company_card(chat_id: int, inn: str, reply_markup=None) -> bool:
@@ -871,36 +984,88 @@ def send_company_card(chat_id: int, inn: str, reply_markup=None) -> bool:
     return True
 
 
+NAME_SEARCH_MIN_LEN = 4  # короче («гос») — слишком широко, просим уточнить
+NAME_SEARCH_LIST_MAX = 10
+NAME_SEARCH_TOO_MANY = 15  # больше — без клавиатуры, только «уточните»
+NAME_SEARCH_COLLECT_CAP = 20  # хватает, чтобы понять «слишком много»
+
+
 def search_companies_by_name(query: str) -> list[tuple[str, str]]:
     results = []
     seen = set()
 
-    for inn, company_data in sro_database.items():
-        company_name = company_data.get("name", "")
-        cleaned = company_name.replace('"', "").replace("«", "").replace("»", "").lower()
-        if query in cleaned:
-            results.append((inn, company_name))
-            seen.add(inn)
+    def _clean_name(name: str) -> str:
+        return name.replace('"', "").replace("«", "").replace("»", "").lower()
 
+    def _display_name_from_reestr(inn: str, reestr_data: dict) -> str:
+        for membership in get_org_memberships(reestr_data).values():
+            for field in ("short_name", "title", "full_name"):
+                name = (membership.get(field) or "").strip()
+                if name and not _looks_like_address(name):
+                    return name
+        title = (reestr_data.get("title") or "").strip()
+        if title and not _looks_like_address(title):
+            return title
+        return ""
+
+    def _add(inn: str, display: str) -> bool:
+        """True — достигнут cap, можно остановить обход."""
+        if inn in seen or not display:
+            return len(results) >= NAME_SEARCH_COLLECT_CAP
+        results.append((inn, display))
+        seen.add(inn)
+        return len(results) >= NAME_SEARCH_COLLECT_CAP
+
+    # Сначала реестр — нормальные названия
     for inn, reestr_data in reestr_database.items():
         if inn in seen:
             continue
+        hit = False
         for membership in get_org_memberships(reestr_data).values():
             for field in ("short_name", "title", "full_name"):
                 name = membership.get(field, "") or ""
-                cleaned = name.replace('"', "").replace("«", "").replace("»", "").lower()
-                if query in cleaned:
-                    results.append((inn, name))
-                    seen.add(inn)
+                if name and query in _clean_name(name) and not _looks_like_address(name):
+                    hit = True
                     break
-            if inn in seen:
+            if hit:
                 break
-        if inn not in seen:
+        if not hit:
             title = reestr_data.get("title") or ""
-            cleaned = title.replace('"', "").replace("«", "").replace("»", "").lower()
-            if title and query in cleaned:
-                results.append((inn, title))
-                seen.add(inn)
+            if title and query in _clean_name(title) and not _looks_like_address(title):
+                hit = True
+        if hit:
+            display = _display_name_from_reestr(inn, reestr_data) or (
+                reestr_data.get("title") or ""
+            )
+            if _add(inn, display):
+                return results
+
+    # Планы: дополняем, адресные «названия» не показываем
+    for inn, company_data in sro_database.items():
+        company_name = company_data.get("name", "") or ""
+        if _looks_like_address(company_name):
+            if inn in seen:
+                continue
+            reestr_data = reestr_database.get(inn)
+            if reestr_data:
+                display = _display_name_from_reestr(inn, reestr_data)
+                if display and query in _clean_name(display):
+                    if _add(inn, display):
+                        return results
+            continue
+        cleaned = _clean_name(company_name)
+        if query not in cleaned:
+            continue
+        if inn in seen:
+            continue
+        display = company_name
+        reestr_data = reestr_database.get(inn)
+        if reestr_data:
+            better = _display_name_from_reestr(inn, reestr_data)
+            if better:
+                display = better
+        if _add(inn, display):
+            return results
 
     return results
 
@@ -1269,6 +1434,10 @@ def try_nrs_text_reply(chat_id: int, user_text: str) -> bool:
         exit_search_mode(chat_id)
         exit_doc_ask_mode(chat_id)
         enter_nrs_link_mode(chat_id)
+        try:
+            bot.send_chat_action(chat_id, "typing")
+        except Exception:
+            pass
         finish_button_reply(
             chat_id,
             format_nrs_link_reply(user_text, chat_id=chat_id),
@@ -1600,8 +1769,8 @@ def _open_org_search(chat_id: int, *, intro: str | None = None) -> None:
     enter_search_mode(chat_id)
     text = intro or (
         "🏢 <b>Универсальный поиск</b>\n\n"
-        "Введите <b>ИНН</b> (только цифры) или часть названия организации "
-        "по <b>всем 15 СРО</b> экосистемы (кавычки можно не ставить)."
+        "Введите <b>ИНН</b> (только цифры) или часть названия "
+        f"(минимум {NAME_SEARCH_MIN_LEN} символа) по <b>всем 15 СРО</b> экосистемы."
     )
     kb = (
         get_controller_keyboard(chat_id)
@@ -2003,7 +2172,8 @@ def send_search_command(message):
     enter_search_mode(message.chat.id)
     bot.send_message(
         message.chat.id,
-        "🏢 <b>Универсальный поиск</b>\n\nВведите ИНН (только цифры) или часть названия организации (кавычки можно не ставить):",
+        "🏢 <b>Универсальный поиск</b>\n\n"
+        f"Введите ИНН (только цифры) или часть названия (минимум {NAME_SEARCH_MIN_LEN} символа):",
         parse_mode="HTML",
         reply_markup=get_main_keyboard(message.chat.id),
     )
