@@ -1,0 +1,9 @@
+[Unit]
+Description=Watchdog: Telegram API + sro-bot restart
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sro-bot
+ExecStart=/bin/bash /opt/sro-bot/vps/telegram_watchdog.sh

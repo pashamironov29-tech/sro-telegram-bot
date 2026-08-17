@@ -36,6 +36,8 @@ $RuntimeFiles = @(
     "sro_profiles.py",
     "blanki_sro.py",
     "info_list_fill.py",
+    "info_list_quiz.py",
+    "doc_checklist.py",
     "trusted_members.py",
     "sro_about.py",
     "sro_fees.py",

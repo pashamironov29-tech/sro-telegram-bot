@@ -720,13 +720,17 @@ def enrich_reestr_entry(inn: str, cache: dict[str, dict], timeout: float = 20.0)
             executor.submit(fetch_reestr_detail, membership): sro_id
             for sro_id, membership in tasks
         }
-        for future in as_completed(futures, timeout=timeout):
-            sro_id = futures[future]
-            try:
-                org["memberships"][sro_id] = future.result()
-                changed = True
-            except Exception:
-                pass
+        try:
+            completed = as_completed(futures, timeout=timeout)
+            for future in completed:
+                sro_id = futures[future]
+                try:
+                    org["memberships"][sro_id] = future.result()
+                    changed = True
+                except Exception:
+                    pass
+        except TimeoutError:
+            pass
 
     if changed:
         cache[inn] = org

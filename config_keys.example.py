@@ -7,6 +7,8 @@ GROQ_API_KEY = "YOUR_GROQ_API_KEY"
 # Основной ИИ: https://openrouter.ai/keys
 OPENROUTER_API_KEY = "YOUR_OPENROUTER_API_KEY"
 OPENROUTER_MODEL = "openai/gpt-4.1"
+# Сканы/PDF контролёра (если пусто — openai/gpt-4.1)
+OPENROUTER_DOC_MODEL = "openai/gpt-4.1"
 
 # Запасной ИИ в РФ (Сбер): https://developers.sber.ru/
 # Ключ авторизации из Studio (строка для Basic), не путать с access_token
