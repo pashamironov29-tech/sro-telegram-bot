@@ -52,3 +52,5 @@ ssh root@201.24.125.236 "systemctl restart sro-bot"
 - Keep one active VPS only (`Inventive Ganymede`).
 - Before major edits run local backup: `C:\BACKUP_WORK\START_BACKUP.bat`.
 - Nightly reestr sync: `sro-reestr-sync.timer` (02:00 MSK). Logs: `/opt/sro-bot/logs/reestr_daily_*.log`.
+- Telegram watchdog: `sro-telegram-watchdog.timer` (каждые 5 мин). Лог: `/opt/sro-bot/logs/telegram_watchdog.log`.
+  При дауне `api.telegram.org` / `ConnectTimeout` сам перезапускает `sro-bot` (кулдаун 15 мин) и пишет админу.

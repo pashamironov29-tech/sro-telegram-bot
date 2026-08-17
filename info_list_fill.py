@@ -13,6 +13,7 @@ import re
 import tempfile
 
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
@@ -84,7 +85,9 @@ def auto_fill_source_disclaimer(sro_id: str | None, *, doc_kind: str = "info_lis
         )
     else:
         what = "рег. №, ИНН, юридический адрес (Местонахождение в реестре), руководитель и страхование"
-        extra = " Фактический и почтовый адрес при необходимости заполните вручную."
+        extra = (
+            " Фактический адрес, телефоны, бухгалтер, ответственный и НРС подставляются из ответов в боте, если вы прошли опрос; иначе заполните вручную."
+        )
 
     return (
         f"⚠️ <b>{sro_name}:</b> {what} взяты из официального реестра "
@@ -410,13 +413,320 @@ def _fill_underscore_field(paragraphs, label_part: str, value: str) -> bool:
         if value in text:
             return True
         if re.search(r"_{3,}", text):
-            paragraph.text = re.sub(r"_{3,}", f" {value} ", text, count=1)
-            paragraph.text = re.sub(r" {2,}", " ", paragraph.text).rstrip() + " "
+            paragraph.text = _replace_underscores_keep_width(text, value, count=1)
             return True
         # Нет подчёркиваний — дописать в конец строки
         paragraph.text = text.rstrip() + f" {value}"
         return True
     return False
+
+
+
+def _il_write_para(
+    paragraph,
+    text: str,
+    *,
+    bold: bool = False,
+    font_name: str = "Times New Roman",
+    size_pt: float = 12,
+) -> None:
+    paragraph.clear()
+    run = paragraph.add_run(text)
+    _apply_run_font(run, bold=bold, font_name=font_name, size_pt=size_pt)
+
+
+def _is_placeholder_line(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    if t.startswith("(") and len(t) < 90:
+        return True
+    if set(t.replace("\t", "")) <= set("._ "):
+        return True
+    return False
+
+
+def _fill_label_then_blank_line(
+    paragraphs,
+    label_part: str,
+    value: str,
+    *,
+    font_name: str = "Times New Roman",
+) -> bool:
+    """Подпись остаётся на своей строке, значение — на следующей пустой/подсказке.
+
+    Так длинный адрес не наезжает на поле ниже.
+    """
+    if not value:
+        return False
+    needle = label_part.lower()
+    for index, paragraph in enumerate(paragraphs):
+        if needle not in (paragraph.text or "").lower():
+            continue
+        head = paragraph.text.split(":", 1)[0]
+        head = re.sub(r"\s*\([^)]*\)", "", head)
+        head = re.sub(r"\s+", " ", head).strip()
+        _il_write_para(paragraph, f"{head}:", bold=True, font_name=font_name)
+        for j in range(index + 1, min(index + 4, len(paragraphs))):
+            nxt = paragraphs[j]
+            raw = nxt.text or ""
+            low = raw.lower()
+            if any(
+                k in low
+                for k in (
+                    "моб",
+                    "тел.:",
+                    "e-mail",
+                    "идентификационн",
+                    "главный бухгалтер",
+                    "лицо, ответствен",
+                    "наличие специалист",
+                    "сведения о страхован",
+                    "юридический адрес",
+                    "адрес почтовый",
+                    "адрес фактическ",
+                    "сокращенное наименован",
+                    "полное наименован",
+                    "руководитель",
+                )
+            ) and not _is_placeholder_line(raw):
+                break
+            if _is_placeholder_line(raw):
+                _il_write_para(nxt, value, bold=False, font_name=font_name)
+                return True
+        _set_label_value_paragraph(
+            paragraph, head, value, label_bold=True, font_name=font_name
+        )
+        return True
+    return False
+
+
+def _replace_underscores_keep_width(text: str, value: str, count: int = 1) -> str:
+    value = (value or "").strip()
+    if not value:
+        return text
+
+    def _repl(match: re.Match[str]) -> str:
+        width = len(match.group(0))
+        body = f" {value} "
+        if len(body) < width:
+            body = body + (" " * (width - len(body)))
+        return body
+
+    return re.sub(r"_{3,}", _repl, text, count=count)
+
+
+def _fill_phone_email_combo(paragraph, phone: str = "", email: str = "") -> bool:
+    """Телефон слева, e-mail справа — табы из шаблона не съедаем."""
+    raw = paragraph.text or ""
+    phone = (phone or "").strip()
+    email = (email or "").strip()
+    if not phone and not email:
+        return False
+    tab_n = raw.count("\t")
+    tabs = "\t" * (tab_n if tab_n >= 2 else 2)
+    low = raw.lower()
+    if "моб" in low:
+        left = "моб. тел.: " + phone
+        keep_bold = False
+    else:
+        left = "Тел.: " + phone
+        keep_bold = True
+    right = "e-mail – " + email
+    paragraph.clear()
+    run = paragraph.add_run(f"{left}{tabs}{right}")
+    _apply_run_font(run, bold=keep_bold, font_name="Times New Roman")
+    return True
+
+
+def _fill_insurance_contract_line(
+    paragraphs,
+    number: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    amount: str = "",
+) -> bool:
+    number = (number or "").strip()
+    date_from = (date_from or "").strip()
+    date_to = (date_to or "").strip()
+    amount = (amount or "").strip()
+    if not (number or date_from or date_to or amount):
+        return False
+    for paragraph in paragraphs:
+        text = paragraph.text or ""
+        if "договор" not in text.lower() or "страхован" not in text.lower():
+            continue
+        orig = text
+        if number:
+            text = _replace_underscores_keep_width(text, number, count=1)
+        if date_from:
+            text = re.sub(
+                r"(\sс\s)_{3,}",
+                lambda m, v=date_from: m.group(1) + _replace_underscores_keep_width(m.group(0)[len(m.group(1)):], v),
+                text,
+                count=1,
+            )
+            if date_from not in text:
+                text = re.sub(r"\sс\s_+", f" с {date_from} ", text, count=1)
+        if date_to:
+            if re.search(r"\sпо\s_+", text):
+                text = re.sub(r"\sпо\s_+", f" по {date_to} ", text, count=1)
+        if amount:
+            text = re.sub(
+                r"(на сумму\s*)_+(\s*руб\.?)?",
+                lambda m, v=amount: f"{m.group(1)}{v} руб.",
+                text,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        if text != orig:
+            _il_write_para(paragraph, text, bold=False)
+            return True
+    return False
+
+
+def _surname_initials(fio: str) -> str:
+    parts = [p for p in (fio or "").split() if p]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return parts[0] + " " + "".join(p[0] + "." for p in parts[1:] if p)
+
+
+def _fill_signature_line(paragraphs, director: str) -> bool:
+    if not director:
+        return False
+    position, fio = _split_director(director)
+    initials = _surname_initials(fio or director)
+    left = position or ""
+    right = initials
+    for paragraph in paragraphs:
+        text = (paragraph.text or "").strip()
+        if "страхован" in text.lower() or "сумм" in text.lower():
+            continue
+        if text.startswith("_") and len(text) > 20 and set(text) <= set("._ "):
+            line = f"{left}\t\t\t{right}" if left else right
+            _il_write_para(paragraph, line, bold=False)
+            return True
+    return False
+
+
+def _fill_specialists_lines(paragraphs, specialists: str) -> bool:
+    raw = (specialists or "").strip()
+    if not raw:
+        return False
+    lines = [ln.strip(" ;") for ln in re.split(r"[\n;]+", raw) if ln.strip(" ;")]
+    if not lines:
+        return False
+    for index, paragraph in enumerate(paragraphs):
+        if "внесенных в нрс" not in (paragraph.text or "").lower():
+            continue
+        _il_write_para(
+            paragraph,
+            "Наличие специалистов, внесенных в НРС:",
+            bold=True,
+        )
+        dest = index + 1
+        placed = 0
+        for line in lines:
+            while dest < len(paragraphs):
+                nxt = paragraphs[dest]
+                low = (nxt.text or "").lower()
+                if "сведения о страхован" in low:
+                    dest = len(paragraphs)
+                    break
+                if _is_placeholder_line(nxt.text):
+                    _il_write_para(nxt, line, bold=False)
+                    dest += 1
+                    placed += 1
+                    break
+                dest += 1
+        return placed > 0
+    return False
+
+
+def _fill_info_list_user_fields(paragraphs, form_data: dict, filled: dict) -> None:
+    """Поля опроса: на своих строках, без сдвига соседних полей."""
+    fact = (form_data.get("fact_address") or "").strip()
+    post = (form_data.get("post_address") or "").strip()
+    if fact:
+        filled["fact_address"] = _fill_label_then_blank_line(
+            paragraphs, "Адрес фактического местонахождения", fact
+        )
+    if post:
+        filled["post_address"] = _fill_label_then_blank_line(
+            paragraphs, "Адрес почтовый", post
+        )
+
+    org_phone = (form_data.get("org_phone") or "").strip()
+    org_email = (form_data.get("org_email") or "").strip()
+    filled["org_contacts"] = False
+    for paragraph in paragraphs:
+        low = (paragraph.text or "").lower()
+        if "тел" in low and "e-mail" in low and "моб" not in low:
+            filled["org_contacts"] = _fill_phone_email_combo(
+                paragraph, org_phone, org_email
+            )
+            break
+
+    mob_lines = [
+        p
+        for p in paragraphs
+        if "моб" in (p.text or "").lower() and "тел" in (p.text or "").lower()
+    ]
+    pairs = (
+        (
+            form_data.get("director_mobile") or "",
+            form_data.get("director_email") or "",
+        ),
+        (
+            form_data.get("accountant_phone") or "",
+            form_data.get("accountant_email") or "",
+        ),
+        (
+            form_data.get("responsible_phone") or "",
+            form_data.get("responsible_email") or "",
+        ),
+    )
+    filled["director_contacts"] = False
+    filled["accountant_contacts"] = False
+    filled["responsible_contacts"] = False
+    flags = ("director_contacts", "accountant_contacts", "responsible_contacts")
+    for index, paragraph in enumerate(mob_lines[:3]):
+        phone, email = pairs[index]
+        if phone or email:
+            filled[flags[index]] = _fill_phone_email_combo(paragraph, phone, email)
+
+    acc_fio = (form_data.get("accountant_fio") or "").strip()
+    filled["accountant"] = False
+    if acc_fio:
+        filled["accountant"] = _fill_label_then_blank_line(
+            paragraphs, "Главный бухгалтер", acc_fio
+        )
+
+    resp_bits = [
+        (form_data.get("responsible_position") or "").strip(),
+        (form_data.get("responsible_fio") or "").strip(),
+    ]
+    resp_text = ", ".join(b for b in resp_bits if b)
+    filled["responsible"] = False
+    if resp_text:
+        filled["responsible"] = _fill_label_then_blank_line(
+            paragraphs, "Лицо, ответственное за взаимодействие с СРО", resp_text
+        )
+
+    specialists = (form_data.get("specialists") or "").strip()
+    filled["specialists"] = _fill_specialists_lines(paragraphs, specialists)
+
+    filled["insurance_contract"] = _fill_insurance_contract_line(
+        paragraphs,
+        form_data.get("insurance_contract") or "",
+        form_data.get("insurance_from") or "",
+        form_data.get("insurance_to") or "",
+        form_data.get("insurance_sum") or "",
+    )
+    filled["signature"] = _fill_signature_line(paragraphs, form_data.get("director") or "")
 
 
 def _fill_insurance_sum_line(paragraphs, amount: str) -> bool:
@@ -490,7 +800,12 @@ def _fill_inn_table(doc: Document, inn: str) -> bool:
         if existing and not all(ch.isdigit() or ch.isspace() for ch in existing):
             continue
         for i, cell in enumerate(cells):
-            cell.text = digits[i] if i < len(digits) else ""
+            digit = digits[i] if i < len(digits) else ""
+            cell.text = digit
+            for para in cell.paragraphs:
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in para.runs:
+                    _apply_run_font(run, bold=False, font_name="Times New Roman", size_pt=12)
         return True
     return False
 
@@ -504,53 +819,35 @@ def fill_info_list_docx(template_path: str, output_path: str, form_data: dict) -
     filled = {
         "reg_number": _fill_header_reg_number(doc, form_data.get("reg_number", "")),
         "inn_table": _fill_inn_table(doc, form_data.get("inn", "")),
-        "full_name": _fill_paragraph_after_label(
+        "full_name": _fill_label_then_blank_line(
             paragraphs,
             "Полное наименование юридического лица",
             form_data.get("full_name", ""),
-            bold_label=True,
-            font_name="Times New Roman",
         ),
-        "short_name": _fill_paragraph_after_label(
+        "short_name": _fill_label_then_blank_line(
             paragraphs,
             "Сокращенное наименование юридического",
             form_data.get("short_name", ""),
-            bold_label=True,
-            font_name="Times New Roman",
         ),
-        # В реестре поле «Местонахождение» = юридический адрес на сайте.
-        # Фактический и почтовый не подставляем — часто отличаются, оставляем вручную.
-        "legal_address": _fill_paragraph_after_label(
+        "legal_address": _fill_label_then_blank_line(
             paragraphs,
             "Юридический адрес",
             address,
-            bold_label=True,
-            font_name="Times New Roman",
         ),
         "fact_address": False,
         "post_address": False,
-        "director": _fill_paragraph_after_label(
+        "director": _fill_label_then_blank_line(
             paragraphs,
             "Руководитель юридического лица",
             form_data.get("director", ""),
-            bold_label=True,
-            font_name="Times New Roman",
         ),
         "insurance_company": _fill_underscore_field(
             paragraphs,
             "Наименование Страховой компании",
             form_data.get("insurance_company", ""),
         ),
-        "insurance_sum": _fill_insurance_sum_line(
-            paragraphs, form_data.get("insurance_sum", "")
-        ),
+        "insurance_sum": False,
     }
-    if filled["director"]:
-        _clear_hint_paragraph_after(
-            paragraphs,
-            "Руководитель юридического лица",
-            hint_substr="должность",
-        )
     if not filled["inn_table"]:
         filled["inn_text"] = _fill_paragraph_after_label(
             paragraphs,
@@ -560,6 +857,7 @@ def fill_info_list_docx(template_path: str, output_path: str, form_data: dict) -
     else:
         filled["inn_text"] = False
 
+    _fill_info_list_user_fields(paragraphs, form_data, filled)
     doc.save(output_path)
     return filled
 
@@ -580,6 +878,7 @@ def generate_info_list_for_inn(
     reestr_data: dict | None,
     *,
     preferred_sro_id: str | None = None,
+    extra: dict | None = None,
 ) -> tuple[str | None, dict | None, dict | None]:
     """
     Returns (output_path, form_data, filled_flags) or (None, None, None).
@@ -597,6 +896,16 @@ def generate_info_list_for_inn(
     )
     if not form_data:
         return None, None, None
+
+    if extra:
+        from info_list_quiz import resolve_quiz_addresses
+
+        merged = resolve_quiz_addresses(
+            form_data, {k: v for k, v in extra.items() if v}
+        )
+        for key, value in merged.items():
+            if value:
+                form_data[key] = value
 
     temp_dir = tempfile.gettempdir()
     safe_inn = form_data["inn"] or "org"

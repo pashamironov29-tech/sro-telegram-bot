@@ -165,7 +165,7 @@ def is_nrs_link_mode(chat_id: int) -> bool:
 
 
 def looks_like_nrs_person_query(text: str) -> bool:
-    """Полное ФИО — для НРС, не для телефонного справочника."""
+    """ФИО или номер НРС (С-… / ПИ-…) — не телефонный справочник и не ИНН."""
     raw = (text or "").strip()
     if not raw or "?" in raw:
         return False
@@ -175,6 +175,11 @@ def looks_like_nrs_person_query(text: str) -> bool:
         "контакт", "найти", "номер", "звонок", "сотрудник", "работник",
     )):
         return False
+    # Пи-142898 / С-73-154334 — сразу в проверку НРС, не в поиск организации
+    parsed = parse_nrs_query(raw)
+    num = (parsed.get("number") or "").strip()
+    if num and (_is_nopriz_number(num) or _is_nostroy_number(num) or re.match(r"^С-", num)):
+        return True
     if not re.fullmatch(r"[а-яёА-ЯЁ.\s\-]+", raw):
         return False
     words = [w for w in re.split(r"\s+", raw) if w]

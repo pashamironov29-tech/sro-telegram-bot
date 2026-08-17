@@ -83,6 +83,8 @@ _BACK_TO_SRO_PICK_ALIASES = frozenset(
 SKIP_ONBOARDING_BUTTON = "▶️ Пропустить (вступаю / без ИНН)"
 # Сброс контекста: снова ввести ИНН или пойти без ИНН (чистые бланки)
 RESTART_ORG_BUTTON = "🔄 Другой ИНН / без ИНН"
+# Одна кнопка в главном меню вместо трёх «назад»
+CHANGE_CONTEXT_BUTTON = "🔄 Сменить СРО / ИНН"
 
 # Вступающий без ИНН: сначала направление, потом конкретное СРО
 JOINER_ACTIVITY_CHOICES: list[tuple[str, str]] = [
@@ -324,6 +326,22 @@ def is_back_to_sro_pick_button(text: str) -> bool:
 
 def is_restart_org_button(text: str) -> bool:
     return (text or "").strip() == RESTART_ORG_BUTTON
+
+
+def can_repick_org_context(chat_id: int) -> bool:
+    """Есть список СРО для повторного выбора (та же орг. / joiner)."""
+    return bool(cached_pickable_sro_ids(chat_id)) or (
+        bool(get_joiner_activity(chat_id)) and not is_awaiting_joiner_activity(chat_id)
+    )
+
+
+def should_show_change_context_button(chat_id: int) -> bool:
+    """Показать одну кнопку «Сменить СРО / ИНН» в главном меню."""
+    return bool(
+        get_user_sro_id(chat_id)
+        or can_repick_org_context(chat_id)
+        or is_joiner_flow(chat_id)
+    )
 
 
 def context_button_label(sro_id: str) -> str:
