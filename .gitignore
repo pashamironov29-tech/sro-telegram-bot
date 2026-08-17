@@ -1,5 +1,6 @@
 # === Секреты и локальные ключи — НИКОГДА в git ===
 config_keys.py
+contacts_data.py
 .env
 .env.*
 !.env.example
@@ -19,6 +20,7 @@ user_sro_context.json
 contacts_access.json
 feedback_questions.jsonl
 nrs_link_mode.json
+doc_checklists.json
 reestr_cache.json
 reestr_*.log
 *_cache*.json
