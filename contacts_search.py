@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import re
 
-from contacts_data import CONTACTS, CONTACT_BUTTONS
+try:
+    from contacts_data import CONTACTS, CONTACT_BUTTONS
+except ImportError:
+    CONTACTS = {}
+    CONTACT_BUTTONS = []
 
 _PERSON_SPLIT = re.compile(r"(?=👤\s*<b>)")
 _NAME_LINE = re.compile(

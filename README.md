@@ -25,6 +25,7 @@ pip install -r requirements.txt
 
 # 2. Секреты
 copy config_keys.example.py config_keys.py
+copy contacts_data.example.py contacts_data.py
 # отредактируйте config_keys.py: BOT_TOKEN и ключи ИИ
 
 # 3. Папка бланков (путь в SRO_FILES_DIR)
@@ -39,6 +40,7 @@ python bot_FINAL_GOLD.py
 | Исключено | Почему |
 |-----------|--------|
 | `config_keys.py` | токены и пароли |
+| `contacts_data.py` | телефоны и почты сотрудников (скопируйте `contacts_data.example.py`) |
 | `reestr_cache.json` | кэш реестра, собирается скриптом |
 | `sro files/` | бланки и внутренние PDF |
 | логи, `bot_users.json` | эксплуатационные данные |
