@@ -55,6 +55,14 @@ _controller_ai_mode: set[int] = set()
 _last_upload_text: dict[int, str] = {}
 _last_upload_name: dict[int, str] = {}
 
+
+# Общие для Telegram и MAX: какие файлы принимает ИИ-помощник контролёра
+CAI_FILE_EXTS = (".pdf", ".docx", ".doc", ".txt", ".csv", ".md", ".xlsx")
+CAI_AUDIO_EXTS = (".ogg", ".oga", ".mp3", ".m4a", ".wav", ".opus", ".aac")
+CAI_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".heic", ".bmp", ".tif", ".tiff")
+CAI_MAX_UPLOAD_BYTES = 18 * 1024 * 1024
+
+
 _MAX_DOC_CHARS = 60000
 _MAX_REPLY_CHARS = 3500
 def _openrouter_base() -> str:
@@ -635,7 +643,7 @@ def extract_text_from_doc(data: bytes) -> str:
 
 
 def extract_text_from_bytes(data: bytes, filename: str = "") -> str:
-    """Текст из PDF / DOC / DOCX / TXT."""
+    """Текст из PDF / DOC / DOCX / TXT / Excel."""
     name = (filename or "").lower()
     if not data:
         return ""
@@ -662,6 +670,35 @@ def extract_text_from_bytes(data: bytes, filename: str = "") -> str:
                 if cells:
                     parts.append(" | ".join(cells))
         return "\n".join(parts)
+
+
+    if name.endswith(".xlsx"):
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            raise RuntimeError("Нужен пакет openpyxl для Excel") from exc
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        parts: list[str] = []
+        for si, sheet in enumerate(wb.worksheets):
+            if si >= 8:
+                parts.append("(остальные листы пропущены)")
+                break
+            parts.append(f"=== Лист: {sheet.title} ===")
+            rows_out = 0
+            for row in sheet.iter_rows(values_only=True):
+                cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+                if not cells:
+                    continue
+                parts.append(" | ".join(cells))
+                rows_out += 1
+                if rows_out >= 250:
+                    parts.append("(… обрезано по строкам)")
+                    break
+        try:
+            wb.close()
+        except Exception:
+            pass
+        return "\n".join(parts).strip()
 
     if name.endswith(".pdf"):
         from pypdf import PdfReader

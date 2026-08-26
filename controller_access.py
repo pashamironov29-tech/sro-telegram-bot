@@ -14,15 +14,17 @@ def controller_chat_ids() -> list[int]:
         raw = getattr(config_keys, "CONTROLLER_CHAT_IDS", None)
         if raw is None:
             raw = getattr(config_keys, "BOT_ADMIN_IDS", [])
+        extra = getattr(config_keys, "MAX_CONTROLLER_IDS", None) or []
     except Exception:
         raw = []
+        extra = []
     out: list[int] = []
-    for x in raw or []:
+    for x in list(raw or []) + list(extra or []):
         try:
             out.append(int(x))
         except (TypeError, ValueError):
             continue
-    return out
+    return list(dict.fromkeys(out))
 
 
 def is_controller(chat_id: int) -> bool:

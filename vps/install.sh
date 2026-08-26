@@ -37,11 +37,13 @@ fi
 
 echo "==> Systemd-сервис бота..."
 cp "$APP_DIR/vps/sro-bot.service" /etc/systemd/system/sro-bot.service
+cp "$APP_DIR/vps/sro-max-bot.service" /etc/systemd/system/sro-max-bot.service
 chmod +x "$APP_DIR/vps/reestr_daily_sync.sh" 2>/dev/null || true
 cp "$APP_DIR/vps/sro-reestr-sync.service" /etc/systemd/system/sro-reestr-sync.service
 cp "$APP_DIR/vps/sro-reestr-sync.timer" /etc/systemd/system/sro-reestr-sync.timer
 systemctl daemon-reload
 systemctl enable sro-bot
+systemctl enable sro-max-bot
 systemctl enable sro-reestr-sync.timer
 systemctl start sro-reestr-sync.timer || true
 
@@ -52,7 +54,9 @@ echo "Готово. Дальше:"
 echo "  1) Залейте файлы бота в $APP_DIR (upload_to_vps.ps1 с Windows)"
 echo "  2) Проверьте config_keys.py"
 echo "  3) systemctl start sro-bot"
-echo "  4) systemctl status sro-bot"
+echo "  3b) systemctl start sro-max-bot   # после MAX_BOT_TOKEN в config_keys.py"
+echo "  4) systemctl status sro-bot sro-max-bot"
 echo "  5) journalctl -u sro-bot -f"
+echo "     journalctl -u sro-max-bot -f"
 echo "  6) Ночной sync: systemctl list-timers sro-reestr-sync.timer"
 echo "     Логи: /opt/sro-bot/logs/reestr_daily_*.log"

@@ -2,6 +2,7 @@ import telebot
 from telebot import apihelper
 from docx import Document
 import os
+from pathlib import Path
 from telebot import types
 # Импортируем наш секретный токен из соседнего файла secrets.py
 from config_keys import BOT_TOKEN, SRO_FILES_DIR, GROQ_API_KEY
@@ -12,7 +13,8 @@ from ai_assistant import (
     enter_search_mode, exit_search_mode, is_search_mode,
     local_ai_route_kind,
 )
-from bot_disclaimers import DOC_QA_DISCLAIMER, FAQ_LINK_FOOTER, OFFICIAL_SOURCE_DISCLAIMER
+from bot_disclaimers import DOC_QA_DISCLAIMER, FAQ_LINK_FOOTER, OFFICIAL_SOURCE_DISCLAIMER, html_esc
+from faq_menu_content import DOCUMENTS_LIST_TEXT
 from feedback_log import (
     FB_CALLBACK,
     append_feedback,
@@ -66,7 +68,8 @@ from sro_context import (
     should_show_change_context_button,
     SKIP_ONBOARDING_BUTTON,
 )
-from sro_profiles import ACTIVITY_LABEL, get_sro_profile, site_base_for_sro
+from sro_profiles import ACTIVITY_LABEL, assert_prod_sro_ready, get_sro_profile, site_base_for_sro
+assert_prod_sro_ready()  # бой: ровно 15 СРО со своими сайтами
 from blanki_sro import BLANKI_MENU_ITEMS, blanki_dir_for_sro, blanki_file_path, blanki_source_label, resolve_blanki_sro_id
 from info_list_fill import (
     INFO_LIST_FILL_SRO_IDS,
@@ -121,6 +124,24 @@ from reestr_sync import (
     load_reestr_cache, format_company_card, enrich_reestr_entry,
     plany_key_from_filename, sro_display_name, get_org_memberships,
     membership_needs_detail_fetch,
+)
+from controller_ai import (
+    CAI_FILE_EXTS,
+    CAI_MAX_UPLOAD_BYTES,
+    CONTROLLER_AI_BUTTON,
+    CONTROLLER_AI_HINT,
+    answer_about_upload,
+    controller_free_chat,
+    enter_controller_ai_mode,
+    exit_controller_ai_mode,
+    extract_text_from_bytes,
+    extract_text_from_image,
+    is_controller_ai_mode,
+    looks_like_doc_followup,
+    remember_upload,
+    safe_filename,
+    summarize_upload_for_controller,
+    transcribe_voice,
 )
 from controller_access import (
     can_use_checko,
@@ -337,8 +358,11 @@ def log_errors(func):
                 flush=True,
             )
             notified = False
+            transient = _is_tg_transient(e)
             try:
-                notified = notify_admins_about_error(func.__name__, event, e)
+                # Обрыв api.telegram.org — не спамить админа «внутренней ошибкой»
+                if not transient:
+                    notified = notify_admins_about_error(func.__name__, event, e)
             except Exception:
                 logging.error("Сбой notify_admins_about_error", exc_info=True)
             chat, _user = _event_chat_and_user(event)
@@ -346,7 +370,12 @@ def log_errors(func):
             if chat_id is None:
                 return None
             try:
-                if notified:
+                if transient:
+                    user_msg = (
+                        "⚠️ Telegram на секунду оборвал связь. "
+                        "Нажмите /start ещё раз."
+                    )
+                elif notified:
                     user_msg = (
                         "⚠️ Произошла внутренняя ошибка. "
                         "Разработчик уже уведомлен — попробуйте позже или /start."
@@ -619,7 +648,7 @@ def send_org_not_found(chat_id: int, query: str | None = None) -> None:
             "не найдена в базе бота."
         )
     elif query:
-        lead = f"❌ По запросу «<b>{query}</b>» организация в базе не найдена."
+        lead = f"❌ По запросу «<b>{html_esc(query)}</b>» организация в базе не найдена."
     else:
         lead = "❌ Организация не найдена в базе бота."
 
@@ -733,7 +762,7 @@ def handle_org_name_search(chat_id: int, user_text: str, *, force: bool = False)
             safe_send_message(
                 chat_id,
                 (
-                    f"🔍 По запросу «<b>{user_text}</b>» слишком много совпадений"
+                    f"🔍 По запросу «<b>{html_esc(user_text)}</b>» слишком много совпадений"
                     f" (больше {NAME_SEARCH_TOO_MANY}).\n\n"
                     "Уточните название или введите <b>ИНН</b>."
                 ),
@@ -751,7 +780,7 @@ def handle_org_name_search(chat_id: int, user_text: str, *, force: bool = False)
             )
             inline_markup.add(btn)
         response_text = (
-            f"🔍 По запросу «<b>{user_text}</b>» найдено организаций: {len(results)}\n"
+            f"🔍 По запросу «<b>{html_esc(user_text)}</b>» найдено организаций: {len(results)}\n"
             "<i>Выберите нужную компанию из списка ниже или уточните название:</i>"
         )
         if len(results) > NAME_SEARCH_LIST_MAX:
@@ -1127,17 +1156,7 @@ def search_companies_by_name(query: str) -> list[tuple[str, str]]:
 how_to_join_text = format_how_to_join_text("OGPS")
 
 # --- ТЕКСТ ПЕРЕЧНЯ ПРОВЕРЯЕМЫХ ДОКУМЕНТОВ ---
-documents_list_text = (
-    "📋 <b>Основные документы, подлежащие проверке при контроле СРО:</b>\n\n"
-    "1. <b>Доверенность</b> на право представлять интересы организации при проверке.\n"
-    "2. <b>Информационный лист</b> с актуальными сведениями об организации на день проверки.\n"
-    "3. <b>Учредительные документы</b> (Устав, Лист записи ЕГРЮЛ, ИНН) — в случае изменений.\n"
-    "4. <b>Договор и Полис страхования</b> гражданской ответственности.\n"
-    "5. <b>Документы на специалистов НРС</b> (Дипломы, УПК, Свидетельства НОК, Трудовые книжки, Должностные инструкции).\n"
-    "6. <b>Документы по контролю качества</b> выполняемых работ.\n\n"
-    "👇 <i>Вы можете скачать официальный перечень и бланки документов по кнопкам ниже:</i>"
-)
-
+documents_list_text = DOCUMENTS_LIST_TEXT
 def finish_button_reply(chat_id, text, reply_markup=None, parse_mode="HTML", **send_kwargs):
     last_exc = None
     for attempt in range(3):
@@ -1566,6 +1585,305 @@ def get_sro_context_picker_keyboard(
     return markup
 
 
+def tg_download_file(file_id: str) -> tuple[bytes, str]:
+    """Скачать файл Telegram по file_id → (bytes, file_path)."""
+    last_exc: BaseException | None = None
+    for attempt in range(5):
+        try:
+            info = bot.get_file(file_id)
+            file_path = getattr(info, "file_path", "") or ""
+            data = bot.download_file(file_path)
+            return data, file_path
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 4 and _is_tg_transient(exc):
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("tg_download_file: empty")
+
+
+def get_controller_ai_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add(types.KeyboardButton(BACK_TO_MENU_BUTTON))
+    return keyboard
+
+
+def open_controller_ai(chat_id: int) -> None:
+    if not is_controller(chat_id):
+        safe_send_message(
+            chat_id,
+            "⛔ Режим «🎙 ИИ-помощник» доступен только сотрудникам контроля.",
+            parse_mode="HTML",
+        )
+        return
+    exit_ai_mode(chat_id)
+    exit_faq_mode(chat_id)
+    exit_search_mode(chat_id)
+    exit_doc_ask_mode(chat_id)
+    exit_nrs_link_mode(chat_id)
+    enter_controller_work_mode(chat_id)
+    enter_controller_ai_mode(chat_id)
+    finish_button_reply(
+        chat_id,
+        CONTROLLER_AI_HINT,
+        reply_markup=get_controller_ai_keyboard(),
+    )
+
+
+def _html_escape_local(s: str) -> str:
+    return (
+        (s or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def get_upload_context_safe(chat_id: int) -> bool:
+    from controller_ai import get_upload_context
+
+    text, _ = get_upload_context(chat_id)
+    return bool(text)
+
+
+def _seems_about_last_doc(q: str) -> bool:
+    ql = (q or "").lower()
+    return any(
+        w in ql
+        for w in (
+            "этот",
+            "этого",
+            "здесь",
+            "выше",
+            "прислал",
+            "загрузил",
+            "файл",
+            "документ",
+            "фото",
+            "скан",
+        )
+    )
+
+
+def _send_controller_ai_text(chat_id: int, question: str) -> None:
+    q = (question or "").strip()
+    if not q:
+        safe_send_message(chat_id, "Пустой запрос — надиктуйте или напишите ещё раз.")
+        return
+    try:
+        bot.send_chat_action(chat_id, "typing")
+    except Exception:
+        pass
+    from controller_ai import get_upload_context
+
+    # Только явное уточнение по уже присланному файлу — без автоподсказок сайта
+    doc_text, _name = get_upload_context(chat_id)
+    if doc_text and (looks_like_doc_followup(q) or _seems_about_last_doc(q)):
+        reply = answer_about_upload(q, chat_id)
+        safe_send_message(
+            chat_id,
+            reply,
+            parse_mode="HTML",
+            reply_markup=get_controller_ai_keyboard(),
+        )
+        return
+
+    # Свободный ответ OpenRouter — без маршрутизации в «план проверок» и разделы сайта
+    reply = controller_free_chat(q)
+    safe_send_message(
+        chat_id,
+        reply,
+        parse_mode="HTML",
+        reply_markup=get_controller_ai_keyboard(),
+    )
+
+
+def handle_controller_ai_voice(message) -> bool:
+    if not is_controller_ai_mode(message.chat.id):
+        return False
+    if not is_controller(message.chat.id):
+        exit_controller_ai_mode(message.chat.id)
+        return False
+    safe_send_message(message.chat.id, "🎧 Распознаю голос…")
+    try:
+        data, path = tg_download_file(message.voice.file_id)
+        fname = Path(path).name if path else "voice.ogg"
+        text = transcribe_voice(data, fname)
+    except RuntimeError as exc:
+        if str(exc) == "no_openrouter_key":
+            safe_send_message(
+                message.chat.id,
+                "⚠️ Нет OPENROUTER_API_KEY — распознавание голоса недоступно.\n"
+                "Напишите текстом или пришлите файл.",
+                parse_mode="HTML",
+                reply_markup=get_controller_ai_keyboard(),
+            )
+            return True
+        safe_send_message(
+            message.chat.id,
+            "⚠️ Не удалось распознать голос. Попробуйте ещё раз или напишите текстом.",
+            reply_markup=get_controller_ai_keyboard(),
+        )
+        return True
+    except Exception:
+        logging.exception("voice STT failed")
+        safe_send_message(
+            message.chat.id,
+            "⚠️ Ошибка распознавания голоса. Напишите текстом.",
+            reply_markup=get_controller_ai_keyboard(),
+        )
+        return True
+    if not text:
+        safe_send_message(
+            message.chat.id,
+            "Не разобрал речь. Повторите голосовое громче/чётче или напишите текстом.",
+            reply_markup=get_controller_ai_keyboard(),
+        )
+        return True
+    safe_send_message(
+        message.chat.id,
+        f"🗣 <b>Распознано:</b>\n{_html_escape_local(text)}",
+        parse_mode="HTML",
+    )
+    _send_controller_ai_text(message.chat.id, text)
+    return True
+
+
+def handle_controller_ai_document(message) -> bool:
+    if not is_controller_ai_mode(message.chat.id):
+        return False
+    if not is_controller(message.chat.id):
+        exit_controller_ai_mode(message.chat.id)
+        return False
+    doc = message.document
+    fname = safe_filename(getattr(doc, "file_name", None) or "document")
+    lower = fname.lower()
+    if not any(lower.endswith(ext) for ext in CAI_FILE_EXTS):
+        safe_send_message(
+            message.chat.id,
+            "Пока принимаю PDF, Word (.doc и .docx), TXT и Excel (.xlsx).\n"
+            "Можно также прислать <b>фото</b> документа.",
+            parse_mode="HTML",
+            reply_markup=get_controller_ai_keyboard(),
+        )
+        return True
+    size = int(getattr(doc, "file_size", 0) or 0)
+    if size > CAI_MAX_UPLOAD_BYTES:
+        safe_send_message(
+            message.chat.id,
+            "Файл слишком большой (лимит ~18 МБ). Пришлите короче или фото ключевых страниц.",
+            reply_markup=get_controller_ai_keyboard(),
+        )
+        return True
+    try:
+        wait = f"📄 Читаю «{fname}»…"
+        if lower.endswith(".pdf"):
+            wait += "\nЕсли это скан — разбираю весь PDF целиком (OCR), обычно 1–2 минуты."
+        safe_send_message(message.chat.id, wait)
+        data, _path = tg_download_file(doc.file_id)
+        raw = extract_text_from_bytes(data, fname)
+    except Exception as exc:
+        logging.exception("document extract failed")
+        hint = (
+            "⚠️ Связь моргнула, файл не разобрался. Пришлите его ещё раз."
+            if _is_tg_transient(exc)
+            else "⚠️ Не удалось скачать/прочитать файл."
+        )
+        try:
+            safe_send_message(
+                message.chat.id,
+                hint,
+                reply_markup=get_controller_ai_keyboard(),
+            )
+        except Exception:
+            pass
+        return True
+    if not (raw or "").strip():
+        safe_send_message(
+            message.chat.id,
+            "⚠️ Не удалось прочитать PDF (нет текста и OCR не сработал).\n"
+            "Пришлите фото страниц крупнее или Word/PDF с текстовым слоем.",
+            parse_mode="HTML",
+            reply_markup=get_controller_ai_keyboard(),
+        )
+        return True
+    remember_upload(message.chat.id, raw, fname)
+    caption = (getattr(message, "caption", None) or "").strip()
+    summary = summarize_upload_for_controller(raw, fname)
+    safe_send_message(
+        message.chat.id,
+        f"📄 <b>{_html_escape_local(fname)}</b>\n\n{summary}",
+        parse_mode="HTML",
+        reply_markup=get_controller_ai_keyboard(),
+    )
+    # Подпись к файлу — отдельный ответ по документу
+    if caption and len(caption) >= 3:
+        follow = answer_about_upload(caption, message.chat.id)
+        safe_send_message(
+            message.chat.id,
+            follow,
+            parse_mode="HTML",
+            reply_markup=get_controller_ai_keyboard(),
+        )
+    return True
+
+
+def handle_controller_ai_photo(message) -> bool:
+    if not is_controller_ai_mode(message.chat.id):
+        return False
+    if not is_controller(message.chat.id):
+        exit_controller_ai_mode(message.chat.id)
+        return False
+    photos = message.photo or []
+    if not photos:
+        return False
+    ph = photos[-1]
+    safe_send_message(message.chat.id, "🖼 Смотрю фото документа…")
+    try:
+        data, path = tg_download_file(ph.file_id)
+        mime = "image/jpeg"
+        if (path or "").lower().endswith(".png"):
+            mime = "image/png"
+        raw = extract_text_from_image(data, mime=mime)
+    except RuntimeError as exc:
+        if "vision" in str(exc) or "openrouter" in str(exc):
+            safe_send_message(
+                message.chat.id,
+                "⚠️ Разбор фото нужен OPENROUTER_API_KEY.\n"
+                "Пришлите PDF/Word или напишите текстом.",
+                parse_mode="HTML",
+                reply_markup=get_controller_ai_keyboard(),
+            )
+            return True
+        safe_send_message(
+            message.chat.id,
+            "⚠️ Не удалось разобрать фото. Пришлите PDF/Word.",
+            reply_markup=get_controller_ai_keyboard(),
+        )
+        return True
+    except Exception:
+        logging.exception("photo OCR failed")
+        safe_send_message(
+            message.chat.id,
+            "⚠️ Ошибка разбора фото. Пришлите PDF/Word.",
+            reply_markup=get_controller_ai_keyboard(),
+        )
+        return True
+    name = "фото документа"
+    remember_upload(message.chat.id, raw, name)
+    summary = summarize_upload_for_controller(raw, name)
+    safe_send_message(
+        message.chat.id,
+        f"🖼 <b>{name}</b>\n\n{summary}",
+        parse_mode="HTML",
+        reply_markup=get_controller_ai_keyboard(),
+    )
+    return True
+
+
 def send_ai_reply(chat_id: int, question: str) -> None:
     try:
         bot.send_chat_action(chat_id, "typing")
@@ -1640,6 +1958,7 @@ def _is_reply_menu_button(user_text: str) -> bool:
         DOC_QA_ASK_BUTTON,
         DOC_QA_BACK_BUTTON,
         AI_BUTTON,
+        CONTROLLER_AI_BUTTON,
         FAQ_AI_BUTTON,
         "❓ Полезная информация",
         "❓ Назад в Полезное",
@@ -1984,7 +2303,7 @@ def get_controller_keyboard(chat_id: int | None = None):
     btn_search = types.KeyboardButton(SEARCH_ORG_BUTTON)
     btn_nrs = types.KeyboardButton(NRS_LINK_BUTTON)
     btn_info = types.KeyboardButton("❓ Полезная информация")
-    btn_ai = types.KeyboardButton(AI_BUTTON)
+    btn_ai = types.KeyboardButton(CONTROLLER_AI_BUTTON)
     keyboard.add(btn_search, btn_nrs)
     keyboard.add(btn_info, btn_ai)
     keyboard.add(types.KeyboardButton(DOC_QA_BUTTON))
@@ -2099,7 +2418,7 @@ def controller_menu_text() -> str:
         f"❓ <b>Полезная информация</b> — бланки, документы для проверки\n"
         f"📋 <b>{DOC_CHECKLIST_BUTTON}</b> — список к проверке, галочки есть/нет\n"
         f"🧠 <b>{DOC_CHECKLIST_HINT_BUTTON}</b> — что обычно просят (плановая / жалоба)\n"
-        f"💬 <b>{AI_BUTTON}</b> — ответы с учётом выбранного СРО (если нужен контекст бланков)\n\n"
+        f"🎙 <b>{CONTROLLER_AI_BUTTON}</b> — голос, разбор файлов/фото, вопросы по документу\n\n"
         f"<i>Контекст СРО для бланков — по ИНН или «{CHANGE_CONTEXT_BUTTON}».</i>\n"
         f"<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
         f"{OFFICIAL_SOURCE_DISCLAIMER}"
@@ -2108,6 +2427,7 @@ def controller_menu_text() -> str:
 
 def open_controller_menu(chat_id: int) -> None:
     exit_ai_mode(chat_id)
+    exit_controller_ai_mode(chat_id)
     exit_faq_mode(chat_id)
     exit_search_mode(chat_id)
     exit_doc_ask_mode(chat_id)
@@ -2351,22 +2671,15 @@ def get_voprosy_site_topics_keyboard(section_id: str, chat_id: int | None = None
 
 def get_download_docs_keyboard(chat_id: int | None = None):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn1 = types.KeyboardButton("📄 1. Информационный лист")
-    btn2 = types.KeyboardButton("📄 2. Заявление о внесении изменений")
-    btn3 = types.KeyboardButton("📄 3. Заявление на проверку")
-    btn4 = types.KeyboardButton("📄 4. Форма доверенности")
-    btn5 = types.KeyboardButton("📄 5. Сведения о специалистах")
-    btn6 = types.KeyboardButton("📄 6. Положения о контроле")
-    btn7 = types.KeyboardButton("📄 7. Уведомление ОДО")
-    btn_back = types.KeyboardButton("❓ Назад в Полезное")
-
-    keyboard.add(btn1)
-    keyboard.add(btn2, btn3)
-    keyboard.add(btn4, btn5)
-    keyboard.add(btn6, btn7)
+    labels = [label for _key, label, _cap in BLANKI_MENU_ITEMS]
+    if labels:
+        keyboard.add(types.KeyboardButton(labels[0]))
+    for i in range(1, len(labels), 2):
+        chunk = labels[i : i + 2]
+        keyboard.add(*[types.KeyboardButton(x) for x in chunk])
     if chat_id is not None and should_show_change_context_button(chat_id):
         keyboard.add(types.KeyboardButton(CHANGE_CONTEXT_BUTTON))
-    keyboard.add(btn_back)
+    keyboard.add(types.KeyboardButton("❓ Назад в Полезное"))
     return keyboard
 
 
@@ -2406,10 +2719,9 @@ def send_welcome(message):
 
 {controller_hint}{OFFICIAL_SOURCE_DISCLAIMER}"""
 
-    bot.send_message(
+    finish_button_reply(
         message.chat.id,
         welcome_text,
-        parse_mode="HTML",
         reply_markup=get_onboarding_keyboard(),
     )
 
@@ -2471,22 +2783,18 @@ def send_users_stats(message):
 
 
 # Текст обновления 1.09 — рассылка только по явной команде админа с confirm.
-UPDATE_NOTICE_VERSION = "1.09"
-UPDATE_NOTICE_TEXT = (
-    "🆕 <b>Обновление бота · версия 1.09</b>\n\n"
-    "При поиске организации теперь можно получить <b>больше сведений</b>, "
-    "чем есть в реестре СРО.\n\n"
-    "После поиска (команда <code>/controller</code> → "
-    f"«{SEARCH_ORG_BUTTON}») появится кнопка "
-    "«🔎 Полная информация»:\n"
-    "• где находится организация (адрес);\n"
-    "• электронная почта — если в карточке СРО её нет;\n"
-    "• номера телефонов.\n\n"
-    "Как пользоваться: введите ИНН или название → "
-    "выберите «Полная информация» → раздел «Контакты» "
-    "(и другие блоки по необходимости).\n\n"
-    "<i>Карточка реестра СРО по-прежнему доступна отдельно.</i>"
-)
+UPDATE_NOTICE_VERSION = "1.10-max"
+UPDATE_NOTICE_TEXT = """🆕 <b>Бот «Помощник СРО» теперь и в MAX</b>
+
+Тот же помощник, что в Telegram: поиск по ИНН, планы проверок, бланки, FAQ.
+Для контролёров — то же меню <code>/controller</code> (поиск, НРС, Checko, ИИ-помощник).
+
+Открыть в MAX:
+https://max.ru/se14097229_bot
+
+Или в поиске MAX наберите: <code>@se14097229_bot</code>
+
+<i>Telegram-бот работает как раньше.</i>"""
 
 
 @bot.message_handler(commands=["notify_update"])
@@ -2600,6 +2908,44 @@ def send_info_command(message):
     )
 
 
+@bot.message_handler(content_types=["voice"])
+@log_errors
+def handle_voice(message):
+    if handle_controller_ai_voice(message):
+        return
+    if is_controller(message.chat.id):
+        bot.send_message(
+            message.chat.id,
+            "Голосовые: /controller → «🎙 ИИ-помощник».",
+            parse_mode="HTML",
+        )
+
+
+@bot.message_handler(content_types=["document"])
+@log_errors
+def handle_document(message):
+    if handle_controller_ai_document(message):
+        return
+    if is_controller(message.chat.id):
+        bot.send_message(
+            message.chat.id,
+            "Чтобы разобрать файл: /controller → «🎙 ИИ-помощник», затем пришлите документ.",
+            parse_mode="HTML",
+        )
+
+
+@bot.message_handler(content_types=["photo"])
+@log_errors
+def handle_photo(message):
+    if handle_controller_ai_photo(message):
+        return
+    if is_controller(message.chat.id):
+        bot.send_message(
+            message.chat.id,
+            "Чтобы разобрать фото: /controller → «🎙 ИИ-помощник», затем пришлите снимок.",
+            parse_mode="HTML",
+        )
+
 @bot.message_handler(content_types=['text'])
 @log_errors
 def handle_text(message):
@@ -2665,6 +3011,9 @@ def handle_text(message):
         send_welcome(message)
         return
     if nav_action == "menu":
+        if is_controller_work_mode(message.chat.id):
+            open_controller_menu(message.chat.id)
+            return
         exit_ai_mode(message.chat.id)
         exit_faq_mode(message.chat.id)
         exit_search_mode(message.chat.id)
@@ -2686,22 +3035,22 @@ def handle_text(message):
         return
 
     if user_text == BACK_TO_MENU_BUTTON:
+        was_controller_ai = is_controller_ai_mode(message.chat.id)
         exit_ai_mode(message.chat.id)
+        exit_controller_ai_mode(message.chat.id)
         exit_faq_mode(message.chat.id)
         exit_search_mode(message.chat.id)
         exit_doc_ask_mode(message.chat.id)
         exit_nrs_link_mode(message.chat.id)
         clear_nav_mode_flags(message.chat.id)
         cancel_await_expected(message.chat.id)
-        menu_kb = (
-            get_controller_keyboard(message.chat.id)
-            if is_controller_work_mode(message.chat.id)
-            else get_main_keyboard(message.chat.id)
-        )
+        if was_controller_ai or is_controller_work_mode(message.chat.id):
+            open_controller_menu(message.chat.id)
+            return
         finish_button_reply(
             message.chat.id,
             "Вы вернулись в главное меню:",
-            reply_markup=menu_kb,
+            reply_markup=get_main_keyboard(message.chat.id),
         )
         return
 
@@ -2829,9 +3178,17 @@ def handle_text(message):
         do_back_to_sro_pick(message.chat.id)
         return
     
+    if user_text == CONTROLLER_AI_BUTTON:
+        open_controller_ai(message.chat.id)
+        return
+
     if user_text == AI_BUTTON:
+        if is_controller_work_mode(message.chat.id):
+            open_controller_ai(message.chat.id)
+            return
         exit_faq_mode(message.chat.id)
         exit_search_mode(message.chat.id)
+        exit_controller_ai_mode(message.chat.id)
         enter_ai_mode(message.chat.id)
         finish_button_reply(message.chat.id, AI_MODE_HINT + ai_context_banner(message.chat.id))
         return
@@ -2896,7 +3253,9 @@ def handle_text(message):
             )
             return
         bot.send_message(message.chat.id, "⏳ Ищу в документах…")
-        result = answer_from_document(user_text, sro_id=sro_id)
+        result = answer_from_document(
+            user_text, sro_id=sro_id, chat_id=message.chat.id
+        )
         bot.send_message(
             message.chat.id,
             result.get("text") or "⚠️ Пустой ответ.",
@@ -3631,7 +3990,9 @@ def handle_doc_fallback(call):
         except Exception:
             pass
         bot.send_message(chat_id, "⏳ Готовлю короткий ответ по документу…")
-        result = answer_from_document(question, sro_id=get_user_sro_id(chat_id))
+        result = answer_from_document(
+            question, sro_id=get_user_sro_id(chat_id), chat_id=chat_id
+        )
         bot.send_message(
             chat_id,
             result.get("text") or "⚠️ Пустой ответ.",
@@ -3865,6 +4226,48 @@ if __name__ == "__main__":
         print("💤 Автосон Windows отключён, пока бот запущен (Ctrl+C — выход).", flush=True)
     print(f"🚀 Бот запускается... ({BOT_VERSION})", flush=True)
     print(f"👥 В журнале пользователей: {users_count()} (файл bot_users.json)", flush=True)
+    # Самопроверка: 🎙 ИИ контролёра (голос/доки) не отвалился после заливки
+    _cai_missing = []
+    for _n in (
+        "CONTROLLER_AI_BUTTON",
+        "get_controller_ai_keyboard",
+        "open_controller_ai",
+        "handle_controller_ai_voice",
+        "handle_controller_ai_document",
+        "handle_controller_ai_photo",
+        "handle_voice",
+        "handle_document",
+        "handle_photo",
+    ):
+        if _n not in globals() or (
+            _n != "CONTROLLER_AI_BUTTON" and not callable(globals().get(_n))
+        ):
+            _cai_missing.append(_n)
+    try:
+        import inspect as _inspect
+
+        if "CONTROLLER_AI_BUTTON" not in _inspect.getsource(get_controller_keyboard):
+            _cai_missing.append("get_controller_keyboard→🎙")
+    except Exception:
+        _cai_missing.append("get_controller_keyboard inspect")
+    if _cai_missing:
+        _msg = (
+            "🚨 На VPS отвалился 🎙 ИИ-помощник контролёра "
+            f"(нет: {', '.join(_cai_missing)}). "
+            "Не молчим: проверь bot_FINAL_GOLD.py / заливку."
+        )
+        print(_msg, flush=True)
+        logging.error(_msg)
+        try:
+            for _aid in _bot_admin_chat_ids():
+                try:
+                    bot.send_message(_aid, _msg)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    else:
+        print("🎙 ИИ-помощник контролёра: связка OK", flush=True)
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=20)

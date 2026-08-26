@@ -503,3 +503,22 @@ def format_nrs_link_reply(query: str, chat_id: int | None = None) -> str:
         "<i>Официальные реестры: nrs.nostroy.ru · nrs.nopriz.ru</i>"
     )
     return "\n".join(lines)
+
+def nrs_registry_link_buttons(query: str) -> list[tuple[str, str]]:
+    """Кнопки MAX/ссылки: каждая ведёт в свой реестр, чужой номер не открываем."""
+    parsed = parse_nrs_query(query)
+    fio = parsed["fio"]
+    number = parsed["number"]
+    if not fio and not number:
+        return []
+    is_nostroy = bool(number and _is_nostroy_number(number))
+    is_nopriz = bool(number and _is_nopriz_number(number))
+    buttons: list[tuple[str, str]] = []
+    if not is_nopriz:
+        buttons.append(("➡️ Открыть в НОСТРОЙ", _nostroy_url(fio=fio, number=number)))
+    if not is_nostroy:
+        if number and is_nopriz:
+            buttons.append(("➡️ Открыть в НОПРИЗ", _nopriz_url(number=number)))
+        else:
+            buttons.append(("➡️ Открыть в НОПРИЗ", _nopriz_url(fio=fio, number=number)))
+    return buttons

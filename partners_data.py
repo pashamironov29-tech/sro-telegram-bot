@@ -8,14 +8,14 @@ PARTNERS_PAGE_URL = "https://www.srogen.ru/kontakty/partnery/"
 
 PARTNER_SRO = [
     {"name": "МОТС", "url": "https://www.sro-mots.ru/", "aliases": ["мотс", "mots", "sro-mots", "sro mots"]},
-    {"name": "ГрадСтройПроект", "url": "https://www.srosp.ru/", "aliases": ["градстройпроект", "srosp", "огпс"]},
+    {"name": "ГрадСтройПроект", "url": "https://www.srosp.ru/", "aliases": ["градстройпроект", "srosp", "огпп"]},
     {"name": "ОСО", "url": "https://www.srooso.ru/", "aliases": ["осо", "srooso"]},
     {"name": "Гео", "url": "https://www.srogeo.ru/", "aliases": ["srogeo", "гео сро"]},
     {"name": "НОСО", "url": "https://www.sronoso.ru/", "aliases": ["носо", "sronoso"]},
     {"name": "ОСОЕС", "url": "https://www.assrtm.ru/", "aliases": ["осоес", "assrtm"]},
     {"name": "ОСОВС", "url": "https://www.msro-sibir.ru/", "aliases": ["осовс", "msro-sibir"]},
     {"name": "ОСОТ", "url": "https://www.nup-sro.ru/", "aliases": ["осот", "nup-sro"]},
-    {"name": "ОГПО", "url": "https://www.sroogpo.ru/", "aliases": ["огпо", "огпп", "sroogpo"]},
+    {"name": "ОГПО", "url": "https://www.sroogpo.ru/", "aliases": ["огпо", "sroogpo"]},
     {"name": "ГЕО", "url": "https://www.sroigeo.ru/", "aliases": ["sroigeo"]},
     {"name": "СПрофПроект", "url": "https://www.sprofproekt.ru/", "aliases": ["sprofproekt", "спрофпроект"]},
     {"name": "ПРИИС", "url": "https://www.sro-priis.ru/", "aliases": ["приис", "sro-priis"]},

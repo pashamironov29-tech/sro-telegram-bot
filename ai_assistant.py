@@ -392,6 +392,8 @@ KEYWORD_RULES = [
     ("perechen_dokumentov", [
         "перечень документов", "проверяемые документы", "документы для проверки",
         "документы для контрольной проверки", "документы при проверке",
+        "документы на проверку", "документы к проверке", "документы на контрольную",
+        "что готовить к проверке", "какие документы на проверку",
         "доверенность на проверку", "информационный лист",
     ]),
     ("nok_obuchenie", [
@@ -467,6 +469,9 @@ KEYWORD_RULES = [
         "вступить", "вступление", "как вступить", "стать членом", "подача заявки",
         "документы для вступления", "какие документы для вступления",
         "документы чтобы вступить", "какие документы нужны для вступления",
+        "документы на вступление", "какие документы на вступление",
+        "пакет документов для вступления", "пакет документов на вступление",
+        "документы чтобы вступить в сро",
     ]),
     ("zakonodatelstvo", [
         "закон", "законы", "законодательство", "градостроительный кодекс", "норматив",
@@ -513,7 +518,7 @@ KEYWORD_RULES = [
 AI_BUTTON = "💬 ИИ-помощник"
 FAQ_AI_BUTTON = "💬 Не нашли в FAQ? Спросите ИИ"
 
-from bot_disclaimers import OFFICIAL_SOURCE_DISCLAIMER
+from bot_disclaimers import OFFICIAL_SOURCE_DISCLAIMER, html_esc
 
 AI_MODE_HINT = (
     "🤖 <b>ИИ-помощник СРО Ассоциации</b>\n\n"
@@ -633,9 +638,11 @@ def _match_by_keywords(question):
 
     if re.search(r"что\s+(такое|это)\s+сро\b", normalized):
         return "o_sro"
+    if re.search(r"\bсро\b.{0,12}что\s+(это|такое)", normalized):
+        return "o_sro"
     if "зачем" in normalized and re.search(r"\bсро\b", normalized):
         return "o_sro"
-    if normalized in ("сро", "что сро", "что такое сро"):
+    if normalized in ("сро", "что сро", "что такое сро", "сро что это", "сро что такое"):
         return "o_sro"
 
     if re.search(r"что\s+(такое|это)\s+одо\b", normalized) or normalized in ("одо", "что одо", "что такое одо"):
@@ -861,8 +868,7 @@ _BLANKI_BOT_HINTS = {
         "Введите <b>ИНН</b> → «Скачать документы»:\n"
         "• 1. Информационный лист\n"
         "• 3. Заявление на проверку\n"
-        "• 4. Форма доверенности\n"
-        "• 6. Положения о контроле\n\n"
+        "• 4. Форма доверенности\n\n"
         "Или: FAQ → «Проверяемые документы»"
     ),
     "blanki_vstuplenie": (
@@ -875,7 +881,7 @@ _BLANKI_BOT_HINTS = {
         "по договорам подряда (заключение, расторжение, исполнение).\n\n"
         "Порядок и форма — на официальной странице СРО (ссылка ниже).\n\n"
         "📩 Направлять на: <code>odokk@srogen.ru</code>\n\n"
-        "Скачать форму в боте: введите <b>ИНН</b> → «Скачать документы» → «7. Уведомление ОДО»"
+        "Скачать форму в боте: введите <b>ИНН</b> → «Скачать документы» → «6. Уведомление ОДО»"
     ),
     "blanki_reestr": (
         "📄 <b>Изменения в реестре</b> — в боте:\n\n"
@@ -889,7 +895,7 @@ def _format_blanki_response(question, topic_id):
         return {
             "ok": True,
             "text": (
-                f"🤖 По вашему вопросу «<b>{question}</b>» — уточните тип бланков:\n\n"
+                f"🤖 По вашему вопросу «<b>{html_esc(question)}</b>» — уточните тип бланков:\n\n"
                 "🔹 <b>Для проверки</b> — напишите «бланки для проверки»\n"
                 "🔹 <b>Для вступления</b> — «бланки для вступления»\n"
                 "🔹 <b>Уведомление ОДО</b> — «бланк ОДО»\n"
@@ -906,7 +912,7 @@ def _format_blanki_response(question, topic_id):
     return {
         "ok": True,
         "text": (
-            f"🤖 По вашему вопросу «<b>{question}</b>»:\n\n"
+            f"🤖 По вашему вопросу «<b>{html_esc(question)}</b>»:\n\n"
             f"{hint}\n"
             f"{site_line}"
             f"{OFFICIAL_SOURCE_DISCLAIMER}"
@@ -925,6 +931,8 @@ _KEYWORD_NAV_ONLY_TOPICS = frozenset({
     "plan_proverok",
     "resultaty_proverok",
     "perechen_dokumentov",
+    "vstuplenie",
+    "o_sro",
     "kontrol_sro",
     "ob_organizacii_kontrolya",
     "nok",
@@ -1093,7 +1101,7 @@ def _format_direct_faq_response(question, topic_id):
     return {
         "ok": True,
         "text": (
-            f"🤖 По вашему вопросу «<b>{question}</b>»:\n\n"
+            f"🤖 По вашему вопросу «<b>{html_esc(question)}</b>»:\n\n"
             f"{_TOPIC_DIRECT_ANSWERS[topic_id]}\n\n"
             f"{OFFICIAL_SOURCE_DISCLAIMER}"
         ),
@@ -1154,7 +1162,7 @@ def _format_site_link_response(
     return {
         "ok": True,
         "text": (
-            f"🤖 По вашему вопросу «<b>{question}</b>»:\n\n"
+            f"🤖 По вашему вопросу «<b>{html_esc(question)}</b>»:\n\n"
             f"💡 <b>Кратко:</b> {brief}\n\n"
             f"📄 Подробно — в разделе «<b>{title}</b>»:\n"
             f"🔗 {url}\n"
@@ -1179,7 +1187,7 @@ def _route_topic_response(
         return {
             "ok": True,
             "text": (
-                f"🤖 По вашему вопросу «<b>{question}</b>»:\n\n"
+                f"🤖 По вашему вопросу «<b>{html_esc(question)}</b>»:\n\n"
                 f"{short}\n\n"
                 f"🔗 Подробнее на сайте: {url}"
                 f"{hint}\n\n"
@@ -1197,7 +1205,7 @@ def _route_topic_response(
             return {
                 "ok": True,
                 "text": (
-                    f"🤖 По вашему вопросу «<b>{question}</b>»:\n\n"
+                    f"🤖 По вашему вопросу «<b>{html_esc(question)}</b>»:\n\n"
                     f"На сайте <b>{name}</b> отдельной страницы личного кабинета нет.\n"
                     f"Напишите на почту: <code>{email}</code> "
                     "(название организации, ИНН, рег. номер в СРО)."
@@ -1273,12 +1281,12 @@ def _format_topic_response(
 
     if suggested_phrase and _normalize(question) != _normalize(suggested_phrase):
         intro = (
-            f"🤖 Вы написали: «<b>{question}</b>»\n"
-            f"Возможно, вы имели в виду: <b>{suggested_phrase}</b>\n\n"
+            f"🤖 Вы написали: «<b>{html_esc(question)}</b>»\n"
+            f"Возможно, вы имели в виду: <b>{html_esc(suggested_phrase)}</b>\n\n"
             "Рекомендую раздел:"
         )
     else:
-        intro = f"🤖 По вашему вопросу «<b>{question}</b>» рекомендую раздел:"
+        intro = f"🤖 По вашему вопросу «<b>{html_esc(question)}</b>» рекомендую раздел:"
 
     return {
         "ok": True,
@@ -1442,6 +1450,15 @@ def match_topic_local(question):
 
 def get_ai_response_groq(question, api_key, chat_id=None, profile=None):
     """Подбор раздела: OpenRouter → GigaChat (РФ) → Groq."""
+    try:
+        from ai_rate_limit import consume_paid_ai
+
+        limited = consume_paid_ai(chat_id)
+        if limited:
+            return {"ok": False, "text": limited}
+    except Exception:
+        pass
+
     explicit_sro = False
     if profile is None:
         profile, _, explicit_sro = _ai_sro_context(chat_id)
@@ -1498,7 +1515,7 @@ def get_ai_response_groq(question, api_key, chat_id=None, profile=None):
             return {
                 "ok": True,
                 "text": (
-                    f"🤖 По вопросу «<b>{question}</b>» в базе бота точного ответа нет.\n\n"
+                    f"🤖 По вопросу «<b>{html_esc(question)}</b>» в базе бота точного ответа нет.\n\n"
                     "Рекомендую посмотреть на официальном сайте:\n"
                     f"🔗 {site}/\n\n"
                     "Или свяжитесь с Ассоциацией:\n"
@@ -1570,6 +1587,25 @@ def local_ai_route_kind(question, chat_id=None):
 
 
 def get_ai_response(question, api_key, chat_id=None):
+    try:
+        from ai_rate_limit import bind_chat_id, reset_chat_id
+
+        _ai_cid_token = bind_chat_id(chat_id)
+    except Exception:
+        _ai_cid_token = None
+    try:
+        return _get_ai_response_body(question, api_key, chat_id)
+    finally:
+        if _ai_cid_token is not None:
+            try:
+                from ai_rate_limit import reset_chat_id as _reset_ai_cid
+
+                _reset_ai_cid(_ai_cid_token)
+            except Exception:
+                pass
+
+
+def _get_ai_response_body(question, api_key, chat_id=None):
     profile, activity, explicit_sro = _ai_sro_context(chat_id)
 
     partner_match = match_partner_query(question)

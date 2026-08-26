@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
 """Короткие единые дисклеймеры для ответов бота (без простыней)."""
 
+import html
+
 # Основной: ИИ, FAQ, сайт, партнёры, вопрос-ответ
 OFFICIAL_SOURCE_DISCLAIMER = (
     "⚠️ <i>Ориентир по сайту СРО · не консультация · +7 (495) 775-81-11</i>"
 )
+
+
 
 # Под ответами FAQ, когда есть кнопка на сайт
 FAQ_LINK_FOOTER = (
@@ -20,3 +24,7 @@ DOC_QA_DISCLAIMER = (
 FEES_UNVERIFIED_DISCLAIMER = (
     "⚠️ <i>Ориентир по типовому Положению — перед оплатой сверьте на сайте.</i>"
 )
+
+
+def html_esc(text: str) -> str:
+    return html.escape(str(text or ""), quote=False)

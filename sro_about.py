@@ -53,15 +53,28 @@ JOIN_SECTION_PREFIX_BY_SRO: dict[str, str] = {
     "OGPS": "/vstuplenie_v_sro",
 }
 
-# Страница «Личный кабинет» есть не у всех (проверено HTTP 24.07.2026; СПРОФ — 28.07.2026).
+# Страница «Личный кабинет» есть не у всех (проверено HTTP 17.08.2026).
 SRO_WITHOUT_LICHNIY_KABINET = frozenset(
     {
         "OSOES",  # assrtm.ru — 404
         "NOSO",  # sronoso.ru — 404
         "OSOT",  # nup-sro.ru — 404
-        "SPROF",  # sprofproekt.ru — 404, на сайте нет раздела ЛК
+        "SPROF",  # sprofproekt.ru — 404
+        "GEOIND",  # srogeo.ru — 404
+        "GPS",  # sro-gps.ru — 404
+        "MGEO",  # sroigeo.ru — 404
+        "OGPO",  # sroogpo.ru — 404
+        "PRIIS",  # sro-priis.ru — 404
     }
 )
+
+# /vstuplenie/zayavka/ на этих сайтах отдаёт 500 — ведём на страницу вступления.
+SRO_ZAYAVKA_BROKEN = frozenset({"OGPO", "OGPP", "OPP", "PRIIS", "SPROF"})
+
+# Филиалы: у ГПС нет /kontakty/predstavitelstva/ (404), есть /kontakty/organization/.
+FILIALY_PATH_BY_SRO: dict[str, str] = {
+    "GPS": "/kontakty/organization/",
+}
 
 # Явная формулировка «не позднее 7 рабочих дней» — только где это на сайте.
 SRO_HAS_7DAY_ADMISSION = frozenset({"OGPS"})
@@ -405,7 +418,12 @@ def rewrite_srogen_path_for_sro(sro_id: str | None, path: str) -> str:
     sid = sro_id or "OGPS"
     if p.startswith("/vstuplenie_v_sro"):
         rest = p[len("/vstuplenie_v_sro") :]
-        return join_section_prefix_for_sro(sid) + rest
+        rewritten = join_section_prefix_for_sro(sid) + rest
+        if sid in SRO_ZAYAVKA_BROKEN and rewritten.rstrip("/").endswith("/zayavka"):
+            return join_path_for_sro(sid)
+        return rewritten
+    if p.startswith("/kontakty/predstavitelstva"):
+        return FILIALY_PATH_BY_SRO.get(sid, p)
     return p
 
 

@@ -37,7 +37,16 @@ except ImportError:
     def _gigachat_chat(*_a, **_k):
         raise RuntimeError("gigachat_unavailable")
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+def _openrouter_base() -> str:
+    try:
+        from config_keys import OPENROUTER_BASE as _b
+    except Exception:
+        _b = ""
+    b = (_b or "https://openrouter.ai/api/v1").strip().rstrip("/")
+    return b or "https://openrouter.ai/api/v1"
+
+
+OPENROUTER_URL = _openrouter_base() + "/chat/completions"
 OPENROUTER_DEFAULT_MODEL = "openai/gpt-4.1-mini"
 
 # Кнопка в главном меню (для всех)
