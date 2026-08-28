@@ -6,38 +6,16 @@ GROQ_API_KEY = "YOUR_GROQ_API_KEY"
 
 # Основной ИИ: https://openrouter.ai/keys
 OPENROUTER_API_KEY = "YOUR_OPENROUTER_API_KEY"
-# Прокси OpenRouter (NL). Прямой openrouter.ai с РФ часто 403.
-OPENROUTER_BASE = "http://147.45.225.70:8080/api/v1"
+# Прокси OpenRouter (опционально). Прямой openrouter.ai с РФ часто 403.
+OPENROUTER_BASE = ""
 OPENROUTER_MODEL = "openai/gpt-4.1"
 # Сканы/PDF контролёра (если пусто — openai/gpt-4.1)
 OPENROUTER_DOC_MODEL = "google/gemini-2.5-flash"
 
 # Запасной ИИ в РФ (Сбер): https://developers.sber.ru/
-# Ключ авторизации из Studio (строка для Basic), не путать с access_token
 GIGACHAT_CREDENTIALS = ""
 GIGACHAT_SCOPE = "GIGACHAT_API_PERS"  # PERS / B2B / CORP
-GIGACHAT_MODEL = "GigaChat"  # Lite; или GigaChat-Pro / GigaChat-Max
-GIGACHAT_VERIFY_SSL = True
-
-# Пароль для раздела «КBOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-SRO_FILES_DIR = r"C:\Users\User\OneDrive\Рабочие\GOLD\sro files"
-
-# Запасной: https://console.groq.com/keys
-GROQ_API_KEY = "YOUR_GROQ_API_KEY"
-
-# Основной ИИ: https://openrouter.ai/keys
-OPENROUTER_API_KEY = "YOUR_OPENROUTER_API_KEY"
-# Прокси OpenRouter (NL). Прямой openrouter.ai с РФ часто 403.
-OPENROUTER_BASE = ""  # опционально: прокси OpenRouter, иначе прямой api
-OPENROUTER_MODEL = "openai/gpt-4.1"
-# Сканы/PDF контролёра (если пусто — openai/gpt-4.1)
-OPENROUTER_DOC_MODEL = "google/gemini-2.5-flash"
-
-# Запасной ИИ в РФ (Сбер): https://developers.sber.ru/
-# Ключ авторизации из Studio (строка для Basic), не путать с access_token
-GIGACHAT_CREDENTIALS = ""
-GIGACHAT_SCOPE = "GIGACHAT_API_PERS"  # PERS / B2B / CORP
-GIGACHAT_MODEL = "GigaChat"  # Lite; или GigaChat-Pro / GigaChat-Max
+GIGACHAT_MODEL = "GigaChat"
 GIGACHAT_VERIFY_SSL = True
 
 # Пароль для раздела «Контакты отделов» (конфиденциальный справочник)
@@ -53,7 +31,6 @@ CONTROLLER_CHAT_IDS = []
 MAX_CONTROLLER_IDS = []
 
 # Checko API key (полная справка по орг. для контролёров)
-# https://checko.ru/integration/api
 CHECKO_API_KEY = ""
 
 # MAX messenger. Токен — только локально, в чат и git не класть.

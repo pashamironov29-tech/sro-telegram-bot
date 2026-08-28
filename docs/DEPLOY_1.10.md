@@ -8,7 +8,7 @@ cd "O:\Рабочие\GOLD"
 ssh root@YOUR_VPS_IP "systemctl restart sro-bot && systemctl is-active sro-bot"
 ```
 
-Проверка в Telegram: `/controller` → кнопка **🎙 ИИ-помощник** (не 💬).
+Проверка: Telegram `/controller` или MAX-меню контролёра → **🎙 ИИ-помощник** (не 💬). Оба сервиса: `systemctl restart sro-bot sro-max-bot`.
 
 В upload уже добавлены: `controller_ai.py`, `bot_disclaimers.py`, `gigachat_client.py`.
 `config_keys.py` на VPS **не перезаписывается**.
