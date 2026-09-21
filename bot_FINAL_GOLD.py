@@ -89,21 +89,6 @@ from info_list_quiz import (
     is_info_list_quiz_active,
     start_info_list_quiz,
 )
-from doc_checklist import (
-    DOC_CHECKLIST_BUTTON,
-    DOC_CHECKLIST_HINT_BUTTON,
-    add_item as checklist_add_item,
-    awaiting_add_inn,
-    begin_await_add,
-    cancel_await_add,
-    checklist_enabled,
-    create_default as create_doc_checklist,
-    delete_checklist,
-    format_checklist_text,
-    get_checklist,
-    hint_text as checklist_hint_text,
-    toggle_item as toggle_checklist_item,
-)
 from trusted_members import (
     TRUSTED_BUTTON,
     format_trusted_members_message,
@@ -192,6 +177,7 @@ from doc_qa import (
     is_doc_ask_mode,
     pop_doc_fallback_pending,
 )
+from sro_news import NEWS_BUTTON, format_news_message, is_news_button_text
 from voprosy_faq import (
     format_voprosy_faq_response,
     get_voprosy_site_item,
@@ -1950,6 +1936,8 @@ def finish_feedback(chat_id: int, expected: str | None) -> None:
 
 def _is_reply_menu_button(user_text: str) -> bool:
     """Текст reply-кнопки меню — не запрос НРС/ИИ."""
+    if is_news_button_text(user_text):
+        return True
     if user_text in (
         BACK_TO_MENU_BUTTON,
         SEARCH_ORG_BUTTON,
@@ -1969,8 +1957,7 @@ def _is_reply_menu_button(user_text: str) -> bool:
         BACK_TO_SRO_PICK_BUTTON,
         BACK_TO_DIRECTION_BUTTON,
         CHANGE_CONTEXT_BUTTON,
-        DOC_CHECKLIST_BUTTON,
-        DOC_CHECKLIST_HINT_BUTTON,
+        NEWS_BUTTON,
     ):
         return True
     return is_restart_org_button(user_text) or is_back_to_sro_pick_button(user_text)
@@ -2205,98 +2192,6 @@ BACK_TO_MENU_BUTTON = "⬅️ Назад в меню"
 
 
 
-def _checklist_org_name(inn: str) -> str:
-    rec = reestr_database.get(inn) if inn else None
-    if isinstance(rec, dict):
-        return (rec.get("title") or "").strip()
-    return ""
-
-
-def _checklist_keyboard(rec: dict) -> types.InlineKeyboardMarkup:
-    kb = types.InlineKeyboardMarkup()
-    for item in rec.get("items") or []:
-        mark = "✅" if item.get("done") else "⬜"
-        title = (item.get("title") or "пункт")[:42]
-        kb.add(
-            types.InlineKeyboardButton(
-                f"{mark} {title}",
-                callback_data=f"dck:t:{item.get('id')}",
-            )
-        )
-    kb.add(
-        types.InlineKeyboardButton("➕ Пункт", callback_data="dck:add"),
-        types.InlineKeyboardButton("🧠 Что собрать", callback_data="dck:hint"),
-    )
-    kb.add(types.InlineKeyboardButton("🗑 Сбросить памятку", callback_data="dck:del"))
-    return kb
-
-
-def _hint_kind_keyboard() -> types.InlineKeyboardMarkup:
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Плановая проверка", callback_data="dck:h:plan"))
-    kb.add(types.InlineKeyboardButton("Жалоба / внеплановая", callback_data="dck:h:complaint"))
-    kb.add(types.InlineKeyboardButton("Изменения в сведениях", callback_data="dck:h:change"))
-    kb.add(types.InlineKeyboardButton("⬅️ К памятке", callback_data="dck:show"))
-    return kb
-
-
-def send_doc_checklist(chat_id: int, *, message=None) -> None:
-    ctx = get_user_context(chat_id)
-    inn = ((ctx or {}).get("inn") or "").strip()
-    if not inn:
-        bot.send_message(
-            chat_id,
-            "Сначала найдите организацию по <b>ИНН</b> — памятка привязана к ней.",
-            parse_mode="HTML",
-        )
-        return
-    rec = get_checklist(inn)
-    if not rec:
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("Создать стандартную памятку", callback_data="dck:new"))
-        kb.add(types.InlineKeyboardButton("🧠 Что собрать", callback_data="dck:hint"))
-        bot.send_message(
-            chat_id,
-            f"📋 Памятки к проверке для ИНН <code>{inn}</code> ещё нет.\n\n"
-            "Контролёр создаёт список документов. Организация отмечает галочками, что уже собрала.",
-            parse_mode="HTML",
-            reply_markup=kb,
-        )
-        return
-    text = format_checklist_text(rec, org_name=_checklist_org_name(inn))
-    kb = _checklist_keyboard(rec)
-    if message is not None:
-        try:
-            bot.edit_message_text(
-                text,
-                chat_id,
-                message.message_id,
-                parse_mode="HTML",
-                reply_markup=kb,
-            )
-            return
-        except Exception:
-            pass
-    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
-
-
-def send_checklist_hint_menu(chat_id: int, *, message=None) -> None:
-    text = (
-        "🧠 <b>Что собрать к проверке</b>\n\n"
-        "Выберите тип — подскажу акцент. Это памятка, не замена перечня СРО."
-    )
-    kb = _hint_kind_keyboard()
-    if message is not None:
-        try:
-            bot.edit_message_text(
-                text, chat_id, message.message_id, parse_mode="HTML", reply_markup=kb
-            )
-            return
-        except Exception:
-            pass
-    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
-
-
 def get_controller_keyboard(chat_id: int | None = None):
     """Меню контролёров: поиск и НРС — первыми, без кнопок вступающих."""
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -2306,12 +2201,7 @@ def get_controller_keyboard(chat_id: int | None = None):
     btn_ai = types.KeyboardButton(CONTROLLER_AI_BUTTON)
     keyboard.add(btn_search, btn_nrs)
     keyboard.add(btn_info, btn_ai)
-    keyboard.add(types.KeyboardButton(DOC_QA_BUTTON))
-    if checklist_enabled():
-        keyboard.add(
-            types.KeyboardButton(DOC_CHECKLIST_BUTTON),
-            types.KeyboardButton(DOC_CHECKLIST_HINT_BUTTON),
-        )
+    keyboard.add(types.KeyboardButton(NEWS_BUTTON))
     if chat_id is not None and get_user_sro_id(chat_id):
         keyboard.add(types.KeyboardButton(RESTART_ORG_BUTTON))
     return keyboard
@@ -2329,10 +2219,10 @@ def get_main_keyboard(chat_id: int | None = None):
     else:
         keyboard.add(btn_search)
     keyboard.add(btn_info, btn_ai)
+    keyboard.add(types.KeyboardButton(NEWS_BUTTON))
     if chat_id is not None:
         if should_show_change_context_button(chat_id):
             keyboard.add(types.KeyboardButton(CHANGE_CONTEXT_BUTTON))
-        keyboard.add(types.KeyboardButton(DOC_QA_BUTTON))
     return keyboard
 
 
@@ -2416,8 +2306,6 @@ def controller_menu_text() -> str:
         f"   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
         f"👤 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ\n"
         f"❓ <b>Полезная информация</b> — бланки, документы для проверки\n"
-        f"📋 <b>{DOC_CHECKLIST_BUTTON}</b> — список к проверке, галочки есть/нет\n"
-        f"🧠 <b>{DOC_CHECKLIST_HINT_BUTTON}</b> — что обычно просят (плановая / жалоба)\n"
         f"🎙 <b>{CONTROLLER_AI_BUTTON}</b> — голос, разбор файлов/фото, вопросы по документу\n\n"
         f"<i>Контекст СРО для бланков — по ИНН или «{CHANGE_CONTEXT_BUTTON}».</i>\n"
         f"<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
@@ -2459,8 +2347,19 @@ def get_onboarding_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.add(types.KeyboardButton(SEARCH_ORG_BUTTON))
     keyboard.add(types.KeyboardButton(SKIP_ONBOARDING_BUTTON))
+    keyboard.add(types.KeyboardButton(NEWS_BUTTON))
     return keyboard
 
+
+
+
+def _news_reply_keyboard(chat_id: int):
+    """Клавиатура после новостей: старт / контролёр / обычное меню."""
+    if is_controller_work_mode(chat_id):
+        return get_controller_keyboard(chat_id)
+    if is_awaiting_inn(chat_id) and not get_user_sro_id(chat_id) and not get_user_profile(chat_id):
+        return get_onboarding_keyboard()
+    return get_main_keyboard(chat_id)
 
 def get_joiner_activity_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -2517,8 +2416,6 @@ def get_info_keyboard():
     btn_back = types.KeyboardButton("⬅️ Назад в меню")
     keyboard.add(btn_faq)
     keyboard.add(btn_check_list)
-    if checklist_enabled():
-        keyboard.add(types.KeyboardButton(DOC_CHECKLIST_BUTTON))
     _add_faq_ai_row(keyboard)
     keyboard.add(btn_back)
     return keyboard
@@ -2869,6 +2766,7 @@ def send_help(message):
 🔍 Поиск организации — ИНН или название, план проверки и реестр
 👤 Проверить в НРС — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ
 ❓ Полезная информация — выписка, НОК, изменения в реестре, FAQ
+📰 Новости стройки — НОСТРОЙ / НОПРИЗ / Минстрой (на экране /start)
 💬 ИИ-помощник — ответы с учётом вашего СРО и ссылки на официальные сайты
 🔄 Другой ИНН / без ИНН — сбросить организацию и начать заново (как /start)
 
@@ -2959,48 +2857,6 @@ def handle_text(message):
             finish_feedback(message.chat.id, user_text)
         return
 
-    if is_info_list_quiz_active(message.chat.id):
-        leave_quiz = (
-            user_text == BACK_TO_MENU_BUTTON
-            or _is_reply_menu_button(user_text)
-            or any(
-                user_text == label or label.split(". ", 1)[-1] in user_text
-                for _k, label, _c in BLANKI_MENU_ITEMS
-            )
-        ) and user_text not in (ILQ_SKIP_BTN, ILQ_CANCEL_BTN)
-        if leave_quiz:
-            cancel_info_list_quiz(message.chat.id)
-        else:
-            _handle_info_list_quiz_text(message.chat.id, user_text)
-            return
-
-    add_inn = awaiting_add_inn(message.chat.id)
-    if add_inn:
-        if user_text.lower() in ("отмена", "cancel", "/cancel") or _is_reply_menu_button(user_text) or user_text == BACK_TO_MENU_BUTTON:
-            cancel_await_add(message.chat.id)
-            if user_text.lower() in ("отмена", "cancel", "/cancel"):
-                bot.send_message(message.chat.id, "Добавление пункта отменено.")
-                return
-        else:
-            rec = checklist_add_item(add_inn, user_text)
-            cancel_await_add(message.chat.id)
-            if rec:
-                bot.send_message(
-                    message.chat.id,
-                    format_checklist_text(rec, org_name=_checklist_org_name(add_inn)),
-                    parse_mode="HTML",
-                    reply_markup=_checklist_keyboard(rec),
-                )
-            else:
-                bot.send_message(message.chat.id, "Не удалось добавить пункт.")
-            return
-
-    if checklist_enabled() and user_text == DOC_CHECKLIST_BUTTON:
-        send_doc_checklist(message.chat.id)
-        return
-    if checklist_enabled() and user_text == DOC_CHECKLIST_HINT_BUTTON:
-        send_checklist_hint_menu(message.chat.id)
-        return
 
     if is_feedback_phrase(user_text):
         prompt_feedback_expected(message.chat.id)
@@ -3098,6 +2954,22 @@ def handle_text(message):
 
     if user_text == SEARCH_ORG_BUTTON:
         _open_org_search(message.chat.id)
+        return
+
+    if is_news_button_text(user_text):
+        exit_ai_mode(message.chat.id)
+        exit_search_mode(message.chat.id)
+        exit_nrs_link_mode(message.chat.id)
+        exit_doc_ask_mode(message.chat.id)
+        try:
+            bot.send_chat_action(message.chat.id, "typing")
+        except Exception:
+            pass
+        finish_button_reply(
+            message.chat.id,
+            format_news_message(limit=5),
+            disable_web_page_preview=True,
+        )
         return
 
     if user_text == CHANGE_CONTEXT_BUTTON:
@@ -3807,101 +3679,6 @@ def handle_text(message):
     )
 
 # === ОБРАБОТЧИК НАЖАТИЙ НА ИНЛАЙН-КНОПКИ ОРГАНИЗАЦИЙ ===
-
-
-@bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("dck:"))
-def handle_doc_checklist_callback(call):
-    try:
-        if not checklist_enabled():
-            bot.answer_callback_query(call.id, "Пилот выключен")
-            return
-        chat_id = call.message.chat.id
-        parts = (call.data or "").split(":")
-        action = parts[1] if len(parts) > 1 else ""
-        ctx = get_user_context(chat_id)
-        inn = ((ctx or {}).get("inn") or "").strip()
-
-        if action == "hint":
-            bot.answer_callback_query(call.id)
-            send_checklist_hint_menu(chat_id, message=call.message)
-            return
-        if action == "h" and len(parts) > 2:
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text(
-                checklist_hint_text(parts[2]),
-                chat_id,
-                call.message.message_id,
-                parse_mode="HTML",
-                reply_markup=_hint_kind_keyboard(),
-            )
-            return
-        if action == "new":
-            if not inn:
-                bot.answer_callback_query(call.id, "Сначала ИНН")
-                return
-            create_doc_checklist(
-                inn,
-                sro_id=get_user_sro_id(chat_id) or "",
-                by=chat_id,
-                title=_checklist_org_name(inn),
-            )
-            bot.answer_callback_query(call.id, "Памятка создана")
-            send_doc_checklist(chat_id, message=call.message)
-            return
-        if action == "show":
-            bot.answer_callback_query(call.id)
-            send_doc_checklist(chat_id, message=call.message)
-            return
-        if action == "add":
-            if not inn:
-                bot.answer_callback_query(call.id, "Сначала ИНН")
-                return
-            if not get_checklist(inn):
-                create_doc_checklist(inn, sro_id=get_user_sro_id(chat_id) or "", by=chat_id)
-            begin_await_add(chat_id, inn)
-            bot.answer_callback_query(call.id, "Жду пункт")
-            bot.send_message(
-                chat_id,
-                "Напишите пункт памятки одним сообщением.\n"
-                "Пример: <code>Договор подряда по объекту …</code>\n"
-                "Отмена — «Отмена».",
-                parse_mode="HTML",
-            )
-            return
-        if action == "del":
-            kb = types.InlineKeyboardMarkup()
-            kb.add(
-                types.InlineKeyboardButton("Да, удалить", callback_data="dck:zap"),
-                types.InlineKeyboardButton("Нет", callback_data="dck:show"),
-            )
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text(
-                "Удалить памятку по этой организации?",
-                chat_id,
-                call.message.message_id,
-                reply_markup=kb,
-            )
-            return
-        if action == "zap":
-            if inn:
-                delete_checklist(inn)
-            bot.answer_callback_query(call.id, "Удалено")
-            send_doc_checklist(chat_id, message=call.message)
-            return
-        if action == "t" and len(parts) > 2:
-            if not inn:
-                bot.answer_callback_query(call.id, "Сначала ИНН")
-                return
-            rec = toggle_checklist_item(inn, parts[2])
-            if not rec:
-                bot.answer_callback_query(call.id, "Пункт не найден")
-                return
-            bot.answer_callback_query(call.id, "Отмечено")
-            send_doc_checklist(chat_id, message=call.message)
-            return
-        bot.answer_callback_query(call.id)
-    except Exception:
-        logging.error("Ошибка в handle_doc_checklist_callback", exc_info=True)
 
 
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("ilq:"))

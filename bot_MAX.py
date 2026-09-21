@@ -46,6 +46,7 @@ from ai_assistant import (
 )
 from blanki_sro import BLANKI_MENU_ITEMS, blanki_file_path, blanki_source_label, resolve_blanki_sro_id
 from bot_disclaimers import FAQ_LINK_FOOTER, OFFICIAL_SOURCE_DISCLAIMER
+from sro_news import NEWS_BUTTON, format_news_message, is_news_button_text
 from faq_menu_content import DOCUMENTS_LIST_TEXT, FAQ_LINKS, FAQ_TEXTS
 from checko_client import (
     SECTIONS as CHECKO_SECTIONS,
@@ -171,16 +172,20 @@ CARD_LOADING_TEXT = (
     "<i>Загружаю проверки с сайта СРО. Обычно 5–15 секунд. "
     "Пожалуйста, подождите — не нажимайте кнопки повторно.</i>"
 )
-HELP_TEXT = """ℹ️ <b>Справка по боту</b>
+HELP_TEXT = """ℹ️ <b>Справка — Помощник СРО</b>
 
-<b>Команды</b> (кнопка меню слева от поля ввода, если MAX её показывает, или введите вручную):
-/start — главное меню
-/help — справка
+<b>Кто это:</b> сервис для членов строительных СРО (15 партнёров): реестр, проверки, бланки, FAQ.
+
+<b>Команды</b> (меню «/» слева от поля ввода или введите текстом):
+/start — приветствие и главное меню
+/help — эта справка
 /search — поиск организации
 /info — FAQ и бланки
-/controller — меню контролёра СРО
+/controller — меню контролёра (только сотрудникам СРО)
 
-В MAX нет нижней клавиатуры Telegram: кнопки — <b>под сообщением</b>.
+В MAX кнопки — <b>под сообщениями</b>, не внизу экрана как в Telegram.
+
+<b>Начало:</b> напишите <b>ИНН</b> или нажмите «Поиск организации» под приветствием.
 
 🔍 Поиск — ИНН или часть названия по 15 СРО
 ❓ Полезная информация — FAQ и бланки
@@ -223,6 +228,7 @@ def main_keyboard(user_id: int) -> list[dict]:
             callback_button("❓ Полезная информация", "menu:info"),
             callback_button(AI_BUTTON, "menu:ai"),
         ),
+        row(callback_button(NEWS_BUTTON, "menu:news")),
     ]
     if get_user_sro_id(user_id) or get_user_context(user_id):
         rows.append(row(callback_button(RESTART_ORG_BUTTON, "menu:restart")))
@@ -289,10 +295,18 @@ def checko_sections_keyboard(inn: str) -> list[dict]:
     return kb(*rows)
 
 
+
+
+def menu_keyboard_for_user(user_id: int) -> list[dict]:
+    if is_awaiting_inn(user_id) and not get_user_sro_id(user_id) and not get_user_context(user_id):
+        return onboarding_keyboard(user_id)
+    return main_keyboard(user_id)
+
 def onboarding_keyboard(user_id: int | None = None) -> list[dict]:
     rows = [
         row(callback_button(SEARCH_ORG, "menu:search")),
         row(callback_button(SKIP_ONBOARDING_BUTTON, "menu:skip")),
+        row(callback_button(NEWS_BUTTON, "menu:news")),
     ]
     if user_id is not None and is_controller(user_id):
         rows.append(row(callback_button("👋 Меню контролёра", "menu:controller")))
@@ -681,16 +695,25 @@ def context_ready_text(user_id: int) -> str:
     )
 
 
+MAX_START_HINTS = frozenset({
+    "привет", "здравствуйте", "добрый день", "добрый вечер", "доброе утро",
+    "hi", "hello", "hey", "start", "старт", "начать", "меню", "help", "?",
+})
+
+
 def welcome_text() -> str:
-    return f"""👋 <b>Добро пожаловать в чат-бот реестра и сервисов СРО!</b>
+    return f"""👋 <b>Помощник СРО</b> — бот реестра и сервисов для членов <b>15 строительных СРО</b>.
 
-🕐 Работает <b>24/7</b> для членов и кураторов <b>15 партнёрских СРО</b>.
+<b>Что умеет:</b> поиск организации по ИНН, план проверок, бланки, FAQ, ответы по документам. Контролёрам — /controller.
 
-📌 <b>Уже член СРО?</b> Введите <b>ИНН</b> организации — найдём карточку в реестре.
+<b>С чего начать</b> (кнопки <i>под этим сообщением</i>):
+• <b>ИНН</b> (10 или 12 цифр) — карточка в реестре
+• <b>{SEARCH_ORG}</b> — поиск по названию
+• <b>Пропустить</b> — если только вступаете в СРО
+• <b>Новости стройки</b> — НОСТРОЙ / НОПРИЗ / Минстрой
+• <b>Справка</b> — команды и подсказки
 
-🔍 Или нажмите <b>{SEARCH_ORG}</b> — поиск по ИНН/названию без выбора СРО.
-
-🆕 <b>Только вступаете?</b> Нажмите <b>Пропустить</b> → направление → конкретное СРО.
+Команды: /start · /help · /search · /info
 
 {OFFICIAL_SOURCE_DISCLAIMER}"""
 
@@ -998,6 +1021,9 @@ def handle_callback(user_id: int, payload: str, update: dict) -> None:
     if payload == "menu:search":
         open_search(user_id)
         return
+    if payload in ("info:news", "menu:news"):
+        send(user_id, format_news_message(limit=5))
+        return
     if payload == "menu:info":
         enter_faq_mode(user_id)
         send(user_id, "📁 <b>Полезная информация</b>\n\nВыберите раздел:", info_keyboard())
@@ -1295,6 +1321,9 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
     if low in ("/start", "start", "старт"):
         send_welcome(user_id, update)
         return
+    if low in MAX_START_HINTS or low in ("", "go"):
+        send_welcome(user_id, update)
+        return
     if low in ("/help", "help", "помощь", "справка"):
         send(user_id, HELP_TEXT, main_keyboard(user_id))
         return
@@ -1414,11 +1443,11 @@ def setup_commands() -> None:
     try:
         api.set_commands(
             [
-                {"name": "start", "description": "Главное меню"},
-                {"name": "help", "description": "Справка по боту"},
-                {"name": "search", "description": "Поиск организации по ИНН"},
-                {"name": "info", "description": "FAQ и бланки документов"},
-                {"name": "controller", "description": "Меню контролёра СРО"},
+                {"name": "start", "description": "Приветствие: что за бот и с чего начать"},
+                {"name": "help", "description": "Справка: команды и как пользоваться"},
+                {"name": "search", "description": "Поиск организации по ИНН или названию"},
+                {"name": "info", "description": "FAQ, бланки и проверяемые документы"},
+                {"name": "controller", "description": "Меню контролёра СРО (сотрудникам)"},
             ]
         )
     except Exception as exc:
