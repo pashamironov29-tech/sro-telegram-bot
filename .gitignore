@@ -97,3 +97,21 @@ desktop.ini
 # === Крупные картинки объявлений (по желанию можно вернуть) ===
 avito_cover_v2.png
 kwork_cover_v2.png
+
+# === Extra ignore (public repo cleanup) ===
+vps/extract_gigachat*
+vps/patch_*_key*
+vps/patch_*_cred*
+vps/set_*_key*
+vps/set_*_password*
+vps/set_checko*
+vps/set_contacts_password*
+vps/set_controller_ids*
+vps/set_openrouter*
+vps/set_gigachat*
+ASTRO*
+_once_*
+MOI_*
+HH_*
+IDEI*
+
