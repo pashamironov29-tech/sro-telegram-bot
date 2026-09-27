@@ -7,6 +7,7 @@ FAQ, поиск по ИНН и ответы из базы бота не счит
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import defaultdict, deque
@@ -19,7 +20,10 @@ _lock = threading.Lock()
 _hits: dict[int, deque[float]] = defaultdict(deque)
 _loaded = False
 
-_STATE_PATH = Path(__file__).resolve().parent / "ai_rate_limit_state.json"
+_plat = (os.getenv("BOT_PLATFORM") or "tg").strip().lower()
+_plat = "max" if _plat == "max" else "tg"
+_STATE_PATH = Path(__file__).resolve().parent / f"ai_rate_limit_state_{_plat}.json"
+_LEGACY_STATE_PATH = Path(__file__).resolve().parent / "ai_rate_limit_state.json"
 
 _DEFAULT_USER = 20
 _DEFAULT_CONTROLLER = 40
@@ -117,10 +121,16 @@ def _load_state() -> None:
     if _loaded:
         return
     _loaded = True
-    if not _STATE_PATH.is_file():
+    if _STATE_PATH.is_file():
+        path = _STATE_PATH
+    elif _plat == "tg" and _LEGACY_STATE_PATH.is_file():
+        path = _LEGACY_STATE_PATH
+    else:
+        return
+    if not path.is_file():
         return
     try:
-        raw = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return
     now = time.time()

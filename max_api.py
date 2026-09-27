@@ -211,7 +211,7 @@ class MaxApi:
         chat_id: int | None = None,
         text: str = "",
         attachments: list[dict] | None = None,
-        format: str = "html",
+        format: str | None = "html",
         notify: bool = True,
     ) -> dict:
         if user_id:
@@ -223,7 +223,9 @@ class MaxApi:
         else:
             raise MaxApiError("Нужен user_id (личка) или chat_id (группа)")
         self._throttle(dest)
-        body: dict[str, Any] = {"text": text or "", "format": format, "notify": notify}
+        body: dict[str, Any] = {"text": text or "", "notify": notify}
+        if format:
+            body["format"] = format
         if attachments:
             body["attachments"] = attachments
         return self._request("POST", "/messages", params=params, json=body)
@@ -319,20 +321,47 @@ class MaxApi:
                 raise
         raise last_exc or MaxApiError("Не удалось отправить файл")
 
-    def download_bytes(self, url: str) -> bytes:
+    def download_bytes(self, url: str, *, max_bytes: int | None = None) -> bytes:
         if not url:
             raise MaxApiError("Пустой URL вложения")
         # CDN: без Authorization бота + публичные CA (не корни Минцифры от platform-api2)
         try:
-            resp = requests.get(url, timeout=120, verify=public_cdn_verify())
+            resp = requests.get(
+                url, timeout=120, verify=public_cdn_verify(), stream=True
+            )
         except requests.RequestException as exc:
             raise MaxApiError(f"Скачивание вложения: {exc}") from exc
-        if resp.status_code >= 400:
-            raise MaxApiError(
-                f"Скачивание вложения {resp.status_code}: {resp.text[:300]}",
-                status=resp.status_code,
-            )
-        return resp.content
+        try:
+            if resp.status_code >= 400:
+                raise MaxApiError(
+                    f"Скачивание вложения {resp.status_code}: {resp.text[:300]}",
+                    status=resp.status_code,
+                )
+            cl = resp.headers.get("Content-Length")
+            if max_bytes is not None and cl:
+                try:
+                    if int(cl) > max_bytes:
+                        raise MaxApiError(
+                            f"Файл слишком большой (Content-Length {cl})",
+                            status=413,
+                        )
+                except ValueError:
+                    pass
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in resp.iter_content(64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise MaxApiError(
+                        f"Файл слишком большой (лимит {max_bytes} байт)",
+                        status=413,
+                    )
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            resp.close()
 
 
 

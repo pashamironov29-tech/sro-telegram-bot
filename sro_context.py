@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -18,16 +19,28 @@ _pending_sro_pick: dict[int, list[str]] = {}
 # (не сбрасывается при выборе конкретного СРО)
 _pickable_sro_cache: dict[int, list[str]] = {}
 
-_CONTEXT_FILE = Path(__file__).resolve().parent / "user_sro_context.json"
+_ROOT = Path(__file__).resolve().parent
+_plat = (os.getenv("BOT_PLATFORM") or "tg").strip().lower()
+_plat = "max" if _plat == "max" else "tg"
+_CONTEXT_FILE = _ROOT / f"user_sro_context_{_plat}.json"
+_LEGACY_CONTEXT_FILE = _ROOT / "user_sro_context.json"
 _ctx_lock = threading.Lock()
 
 
 def _load_persisted_context() -> None:
     """Восстановить выбранное СРО после рестарта бота (иначе DocQA видит только ГрК)."""
-    if not _CONTEXT_FILE.is_file():
+    # Старый общий файл — только для TG (миграция). MAX его не читает: иначе
+    # совпадение ID подтянет чужой контекст СРО/ИНН.
+    if _CONTEXT_FILE.is_file():
+        path = _CONTEXT_FILE
+    elif _plat == "tg" and _LEGACY_CONTEXT_FILE.is_file():
+        path = _LEGACY_CONTEXT_FILE
+    else:
+        return
+    if not path.is_file():
         return
     try:
-        raw = json.loads(_CONTEXT_FILE.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return
     users = raw.get("users") if isinstance(raw, dict) else None
@@ -51,21 +64,22 @@ def _load_persisted_context() -> None:
 
 
 def _persist_context() -> None:
-    payload = {
-        "users": {
+    with _ctx_lock:
+        snap = {
             str(cid): {"sro_id": ctx.get("sro_id"), "inn": ctx.get("inn")}
-            for cid, ctx in _user_context.items()
+            for cid, ctx in list(_user_context.items())
             if isinstance(ctx, dict) and ctx.get("sro_id")
         }
-    }
-    try:
-        with _ctx_lock:
-            _CONTEXT_FILE.write_text(
+        payload = {"users": snap}
+        try:
+            tmp = _CONTEXT_FILE.with_suffix(".tmp")
+            tmp.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-    except Exception:
-        pass
+            tmp.replace(_CONTEXT_FILE)
+        except Exception:
+            pass
 
 
 _load_persisted_context()

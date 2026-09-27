@@ -7,6 +7,7 @@ import io
 import logging
 import re
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -54,6 +55,8 @@ _controller_ai_mode: set[int] = set()
 # Последний разобранный текст документа (для уточняющих вопросов)
 _last_upload_text: dict[int, str] = {}
 _last_upload_name: dict[int, str] = {}
+_last_upload_ts: dict[int, float] = {}
+_UPLOAD_TTL_SEC = 3600
 
 
 # Общие для Telegram и MAX: какие файлы принимает ИИ-помощник контролёра
@@ -103,12 +106,23 @@ def enter_controller_ai_mode(chat_id: int) -> None:
         pass
 
 
+def clear_upload_context(chat_id: int) -> None:
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return
+    _last_upload_text.pop(cid, None)
+    _last_upload_name.pop(cid, None)
+    _last_upload_ts.pop(cid, None)
+
+
 def exit_controller_ai_mode(chat_id: int) -> None:
     try:
         cid = int(chat_id)
     except (TypeError, ValueError):
         return
     _controller_ai_mode.discard(cid)
+    clear_upload_context(cid)
 
 
 def fix_known_sro_ocr_names(text: str) -> str:
@@ -142,12 +156,21 @@ def remember_upload(chat_id: int, text: str, name: str = "документ") -> 
         cleaned = cleaned[:_MAX_DOC_CHARS] + "\n…"
     _last_upload_text[cid] = cleaned
     _last_upload_name[cid] = (name or "документ").strip()[:120]
+    _last_upload_ts[cid] = time.time()
 
 
 def get_upload_context(chat_id: int) -> tuple[str, str]:
     try:
         cid = int(chat_id)
     except (TypeError, ValueError):
+        return "", ""
+    ts = _last_upload_ts.get(cid, 0.0)
+    if ts and (time.time() - ts) > _UPLOAD_TTL_SEC:
+        clear_upload_context(cid)
+        return "", ""
+    if cid in _last_upload_text and not ts:
+        # старые записи без метки — один час с момента первого чтения не знаем; сброс
+        clear_upload_context(cid)
         return "", ""
     return _last_upload_text.get(cid, ""), _last_upload_name.get(cid, "")
 
@@ -176,6 +199,17 @@ def _chat_completion(
     plugins: list | None = None,
     timeout: int = 90,
 ) -> str:
+    # Квота платного ИИ (контролёры 40/ч) — если chat_id привязан через ai_chat_scope
+    try:
+        from ai_rate_limit import PaidAiRateLimited, consume_paid_ai, current_chat_id
+
+        cid = current_chat_id()
+        if cid is not None:
+            limited = consume_paid_ai(cid)
+            if limited:
+                raise PaidAiRateLimited(limited)
+    except ImportError:
+        pass
     or_key = (_OR_KEY or "").strip()
     model = (model or _OR_MODEL or OPENROUTER_DEFAULT_MODEL).strip() or OPENROUTER_DEFAULT_MODEL
     if or_key:
@@ -296,6 +330,7 @@ def _transcribe_openrouter(data: bytes, filename: str) -> str:
 
 
 _local_whisper_model = None
+_whisper_lock = threading.Lock()
 
 
 def _transcribe_local(data: bytes, filename: str) -> str:
@@ -309,25 +344,26 @@ def _transcribe_local(data: bytes, filename: str) -> str:
     except Exception as exc:
         raise RuntimeError("no_local_whisper") from exc
 
-    if _local_whisper_model is None:
-        # tiny/base — хватает для диктовок контролёра на CPU
-        _local_whisper_model = WhisperModel(
-            "tiny",
-            device="cpu",
-            compute_type="int8",
-        )
-
     suffix = "." + _audio_format(filename)
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(data)
         tmp_path = tmp.name
     try:
-        segments, _info = _local_whisper_model.transcribe(
-            tmp_path,
-            language="ru",
-            vad_filter=True,
-        )
-        parts = [s.text.strip() for s in segments if (s.text or "").strip()]
+        # init + transcribe под одним lock — иначе два потока грузят модель дважды
+        with _whisper_lock:
+            if _local_whisper_model is None:
+                # tiny/base — хватает для диктовок контролёра на CPU
+                _local_whisper_model = WhisperModel(
+                    "tiny",
+                    device="cpu",
+                    compute_type="int8",
+                )
+            segments, _info = _local_whisper_model.transcribe(
+                tmp_path,
+                language="ru",
+                vad_filter=True,
+            )
+            parts = [s.text.strip() for s in segments if (s.text or "").strip()]
         return " ".join(parts).strip()
     finally:
         try:
@@ -732,7 +768,7 @@ def extract_text_from_bytes(data: bytes, filename: str = "") -> str:
 
     # По расширению не узнали — пробуем как текст
     sample = data[:200]
-    if b"\\x00" not in sample:
+    if b"\x00" not in sample:
         return data.decode("utf-8", errors="ignore")
     return ""
 
@@ -928,12 +964,19 @@ def summarize_upload_for_controller(text: str, filename: str = "документ
             model=_doc_model(),
             timeout=120,
         )
-    except RuntimeError:
-        return (
-            "⚠️ Нет ключа ИИ (OPENROUTER_API_KEY или GROQ_API_KEY).\n"
-            "Текст из файла получен, но разобрать его не удалось."
-        )
     except Exception as exc:
+        try:
+            from ai_rate_limit import PaidAiRateLimited
+
+            if isinstance(exc, PaidAiRateLimited):
+                return exc.text
+        except ImportError:
+            pass
+        if isinstance(exc, RuntimeError):
+            return (
+                "⚠️ Нет ключа ИИ (OPENROUTER_API_KEY или GROQ_API_KEY).\n"
+                "Текст из файла получен, но разобрать его не удалось."
+            )
         logging.warning("controller_ai summarize failed: %s", exc)
         # Fallback: первые абзацы без ИИ
         if looks_like_unreliable_scan(body, filename=filename):
@@ -945,7 +988,7 @@ def summarize_upload_for_controller(text: str, filename: str = "документ
         )
     return fix_known_sro_ocr_names(
         _with_scan_quality_banner(
-            _trim_reply(_html_escape(answer)), body, filename=filename
+            _html_escape(_trim_reply(answer)), body, filename=filename
         )
     )
 
@@ -981,11 +1024,18 @@ def answer_about_upload(question: str, chat_id: int) -> str:
             timeout=120,
         )
     except Exception as exc:
+        try:
+            from ai_rate_limit import PaidAiRateLimited
+
+            if isinstance(exc, PaidAiRateLimited):
+                return exc.text
+        except ImportError:
+            pass
         logging.warning("controller_ai answer_about_upload failed: %s", exc)
         return "⚠️ Не удалось ответить по документу. Попробуйте ещё раз."
     return fix_known_sro_ocr_names(
         _with_scan_quality_banner(
-            _trim_reply(_html_escape(answer)), doc_text, filename=doc_name
+            _html_escape(_trim_reply(answer)), doc_text, filename=doc_name
         )
     )
 
@@ -1062,15 +1112,23 @@ def controller_free_chat(question: str) -> str:
             ],
             max_tokens=900,
         )
-    except RuntimeError:
-        return (
-            "⚠️ Нет доступа к ИИ (OpenROUTER). "
-            "Проверьте OPENROUTER_BASE/ключ или напишите вопрос иначе."
-        )
     except Exception as exc:
+        try:
+            from ai_rate_limit import PaidAiRateLimited
+
+            if isinstance(exc, PaidAiRateLimited):
+                return exc.text
+        except ImportError:
+            pass
+        if isinstance(exc, RuntimeError):
+            return (
+                "⚠️ Нет доступа к ИИ (OpenROUTER). "
+                "Проверьте OPENROUTER_BASE/ключ или напишите вопрос иначе."
+            )
         logging.warning("controller_free_chat failed: %s", exc)
         return "⚠️ ИИ временно недоступен. Попробуйте ещё раз."
-    return _trim_reply(_html_escape(answer))
+    return _html_escape(_trim_reply(answer))
+
 
 def looks_like_doc_followup(question: str) -> bool:
     q = (question or "").lower()
@@ -1088,9 +1146,10 @@ def looks_like_doc_followup(question: str) -> bool:
         "найди в",
         "выпиши",
         "сумма",
-        "инн",
     )
-    return any(k in q for k in keys)
+    if any(k in q for k in keys):
+        return True
+    return bool(re.search(r"(?<![а-яa-z])инн(?![а-яa-z])", q))
 
 
 def safe_filename(name: str) -> str:

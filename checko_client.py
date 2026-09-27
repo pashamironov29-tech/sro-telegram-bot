@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 import requests
+
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None  # type: ignore
+
+_quota_lock = threading.Lock()
 
 API_BASE = "https://api.checko.ru/v2"
 CACHE_TTL_SEC = 24 * 3600
@@ -69,11 +77,15 @@ def _load_quota() -> dict[str, Any]:
 
 
 def _save_quota(data: dict[str, Any]) -> None:
-    _quota_path().write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    path = _quota_path()
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
 
 
 def requests_used_today() -> int:
-    q = _load_quota()
+    with _quota_lock:
+        q = _load_quota()
     today = time.strftime("%Y-%m-%d", time.gmtime())
     if q.get("day") != today:
         return 0
@@ -82,14 +94,28 @@ def requests_used_today() -> int:
 
 def _bump_quota() -> bool:
     today = time.strftime("%Y-%m-%d", time.gmtime())
-    q = _load_quota()
-    if q.get("day") != today:
-        q = {"day": today, "count": 0}
-    if int(q.get("count") or 0) >= DAILY_LIMIT:
-        return False
-    q["count"] = int(q.get("count") or 0) + 1
-    _save_quota(q)
-    return True
+    lock_path = _quota_path().with_suffix(".lock")
+
+    def _do() -> bool:
+        q = _load_quota()
+        if q.get("day") != today:
+            q = {"day": today, "count": 0}
+        if int(q.get("count") or 0) >= DAILY_LIMIT:
+            return False
+        q["count"] = int(q.get("count") or 0) + 1
+        _save_quota(q)
+        return True
+
+    with _quota_lock:
+        if _fcntl is None:
+            return _do()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a+", encoding="utf-8") as lf:
+            _fcntl.flock(lf.fileno(), _fcntl.LOCK_EX)
+            try:
+                return _do()
+            finally:
+                _fcntl.flock(lf.fileno(), _fcntl.LOCK_UN)
 
 
 def _read_cache(method: str, inn: str) -> dict | None:

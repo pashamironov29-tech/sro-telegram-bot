@@ -58,15 +58,21 @@ def _model() -> str:
     return (_MODEL or "GigaChat").strip() or "GigaChat"
 
 
-def _post(url: str, **kwargs: Any) -> requests.Response:
-    """POST с запасным verify=False при SSL-ошибке (часто на VPS без цепочки Сбера)."""
-    verify = _verify_ssl()
+def _ssl_verify_arg() -> Any:
+    """True → бандл Минцифры (как max_api); False только если явно выключено в конфиге."""
+    if not _verify_ssl():
+        return False
     try:
-        return requests.post(url, verify=verify, **kwargs)
-    except requests.exceptions.SSLError:
-        if verify is False:
-            raise
-        return requests.post(url, verify=False, **kwargs)
+        from max_api import verify_path
+
+        return verify_path()
+    except Exception:
+        return True
+
+
+def _post(url: str, **kwargs: Any) -> requests.Response:
+    """POST без молчаливого verify=False (ключ OAuth не уходит в MITM)."""
+    return requests.post(url, verify=_ssl_verify_arg(), **kwargs)
 
 
 def _fetch_token() -> str:

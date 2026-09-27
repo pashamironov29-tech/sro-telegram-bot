@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
@@ -49,7 +50,7 @@ def _openrouter_base() -> str:
 OPENROUTER_URL = _openrouter_base() + "/chat/completions"
 OPENROUTER_DEFAULT_MODEL = "openai/gpt-4.1-mini"
 
-# Кнопка в главном меню (для всех)
+# Кнопка меню (пилот: вход только BOT_ADMIN_IDS в bot_FINAL_GOLD)
 DOC_QA_BUTTON = "📕 Документы"
 DOC_QA_ASK_BUTTON = "💬 Спросить по документам"
 DOC_QA_BACK_BUTTON = "⬅️ Назад в меню"
@@ -779,8 +780,10 @@ def probe_document_hit(
             f"<i>Тексты положений: {', '.join(DOC_QA_SRO_TEXTS.values())} "
             f"— лучше выбрать СРО в контексте.</i>"
         )
+    from html import escape as _html_esc
+
     offer_text = (
-        f"📕 По вопросу «<b>{question}</b>» в документе есть формулировка:\n"
+        f"📕 По вопросу «<b>{_html_esc(question or '')}</b>» в документе есть формулировка:\n"
         f"<b>{titles_line}</b>\n\n"
         "Хотите короткий ответ <b>по тексту документа</b> "
         "(не только ссылку на раздел сайта)?\n\n"
@@ -850,8 +853,13 @@ def _chat_completion(messages: list[dict], max_tokens: int = 900) -> str:
     return r.json()["choices"][0]["message"]["content"].strip()
 
 
-def answer_from_document(question: str, sro_id: str | None = None) -> dict:
+def answer_from_document(
+    question: str, sro_id: str | None = None, chat_id: int | None = None
+) -> dict:
     """Ответ только по найденным кускам загруженных документов."""
+    from html import escape as _html_esc
+
+    q_safe = _html_esc(question or "")
     search_q = expand_doc_query(question)
     sid = (sro_id or "").strip().upper() or None
     # Без СРО не ищем «молча» только в ГрК и не пишем «не нашлось в кодексе»
@@ -877,16 +885,16 @@ def answer_from_document(question: str, sro_id: str | None = None) -> dict:
         else:
             loaded = [t for t in list_loaded_docs() if "кодекс" in t.lower()]
     except FileNotFoundError as e:
-        return {"ok": False, "text": f"⚠️ {e}"}
+        return {"ok": False, "text": f"⚠️ {_html_esc(str(e))}"}
     except Exception as e:
-        return {"ok": False, "text": f"⚠️ Не удалось прочитать документы: {e}"}
+        return {"ok": False, "text": f"⚠️ Не удалось прочитать документы: {_html_esc(str(e))}"}
 
     if not chunks:
         docs = ", ".join(loaded) if loaded else "база пуста"
         return {
             "ok": True,
             "text": (
-                f"📕 По вопросу «<b>{question}</b>» в документах "
+                f"📕 По вопросу «<b>{q_safe}</b>» в документах "
                 f"({docs}) не нашлось близких фрагментов.\n\n"
                 "Попробуйте другими словами или уточните документ/статью."
                 f"{DOC_QA_RETRY_HINT}"
@@ -930,6 +938,20 @@ def answer_from_document(question: str, sro_id: str | None = None) -> dict:
         f"Вопрос пользователя:\n{search_q}\n\n"
         f"Фрагменты из документов:\n{context}"
     )
+    # Квоту списываем только перед реальным вызовом LLM (не на «нет фрагментов»).
+    if chat_id is not None:
+        try:
+            from ai_rate_limit import consume_paid_ai
+
+            limited = consume_paid_ai(chat_id)
+            if limited:
+                return {"ok": False, "text": limited}
+        except Exception:
+            logging.exception("doc_qa consume_paid_ai failed")
+            return {
+                "ok": False,
+                "text": "⚠️ Лимит ИИ временно недоступен. Попробуйте через минуту.",
+            }
     try:
         answer = _chat_completion(
             [
@@ -970,7 +992,7 @@ def answer_from_document(question: str, sro_id: str | None = None) -> dict:
             f"📕 <b>Поиск по документам</b>\n"
             f"<i>источники: {src_line}</i>\n"
             f"<i>модель: {backend}</i>\n\n"
-            f"❓ <b>{question}</b>\n\n"
+            f"❓ <b>{q_safe}</b>\n\n"
             f"{safe}"
             f"{DOC_QA_RETRY_HINT}"
         ),

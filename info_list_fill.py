@@ -24,6 +24,22 @@ from reestr_sync import (
     sro_display_name,
 )
 
+
+def _unique_temp_docx(prefix: str) -> str:
+    """Уникальный временный .docx (без гонки по ИНН между пользователями)."""
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=".docx")
+    os.close(fd)
+    return path
+
+
+def _remove_temp_quiet(path: str | None) -> None:
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
 # Информационный лист — все партнёрские СРО
 INFO_LIST_FILL_SRO_IDS = frozenset(SRO_SOURCES.keys())
 # Заявление об изменениях: автозаполнение выключено (пустое множество)
@@ -907,10 +923,13 @@ def generate_info_list_for_inn(
             if value:
                 form_data[key] = value
 
-    temp_dir = tempfile.gettempdir()
     safe_inn = form_data["inn"] or "org"
-    output_path = os.path.join(temp_dir, f"info_list_{sid}_{safe_inn}.docx")
-    filled = fill_info_list_docx(template_path, output_path, form_data)
+    output_path = _unique_temp_docx(f"info_list_{sid}_{safe_inn}_")
+    try:
+        filled = fill_info_list_docx(template_path, output_path, form_data)
+    except Exception:
+        _remove_temp_quiet(output_path)
+        raise
     return output_path, form_data, filled
 
 
@@ -1027,10 +1046,13 @@ def generate_zayavlenie_izmeneniya_for_inn(
     if not form_data:
         return None, None, None
 
-    temp_dir = tempfile.gettempdir()
     safe_inn = form_data["inn"] or "org"
-    output_path = os.path.join(temp_dir, f"zayavlenie_izmeneniya_{sid}_{safe_inn}.docx")
-    filled = fill_zayavlenie_izmeneniya_docx(template_path, output_path, form_data)
+    output_path = _unique_temp_docx(f"zayavlenie_izmeneniya_{sid}_{safe_inn}_")
+    try:
+        filled = fill_zayavlenie_izmeneniya_docx(template_path, output_path, form_data)
+    except Exception:
+        _remove_temp_quiet(output_path)
+        raise
     return output_path, form_data, filled
 
 
@@ -1215,10 +1237,13 @@ def generate_zayavlenie_proverka_for_inn(
     if not form_data:
         return None, None, None
 
-    temp_dir = tempfile.gettempdir()
     safe_inn = form_data["inn"] or "org"
-    output_path = os.path.join(temp_dir, f"zayavlenie_proverka_{sid}_{safe_inn}.docx")
-    filled = fill_zayavlenie_proverka_docx(template_path, output_path, form_data)
+    output_path = _unique_temp_docx(f"zayavlenie_proverka_{sid}_{safe_inn}_")
+    try:
+        filled = fill_zayavlenie_proverka_docx(template_path, output_path, form_data)
+    except Exception:
+        _remove_temp_quiet(output_path)
+        raise
     return output_path, form_data, filled
 
 
@@ -1586,8 +1611,11 @@ def generate_doverennost_for_inn(
     if not form_data:
         return None, None, None
 
-    temp_dir = tempfile.gettempdir()
     safe_inn = form_data["inn"] or "org"
-    output_path = os.path.join(temp_dir, f"doverennost_{sid}_{safe_inn}.docx")
-    filled = build_doverennost_docx(output_path, form_data, sid)
+    output_path = _unique_temp_docx(f"doverennost_{sid}_{safe_inn}_")
+    try:
+        filled = build_doverennost_docx(output_path, form_data, sid)
+    except Exception:
+        _remove_temp_quiet(output_path)
+        raise
     return output_path, form_data, filled

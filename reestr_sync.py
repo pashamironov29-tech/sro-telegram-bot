@@ -7,7 +7,9 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime
+from html import escape as html_escape
 from html import unescape
 from urllib.parse import urljoin
 
@@ -715,22 +717,28 @@ def enrich_reestr_entry(inn: str, cache: dict[str, dict], timeout: float = 20.0)
 
     changed = False
     workers = min(4, len(tasks))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    executor = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {
             executor.submit(fetch_reestr_detail, membership): sro_id
             for sro_id, membership in tasks
         }
         try:
-            completed = as_completed(futures, timeout=timeout)
-            for future in completed:
+            for future in as_completed(futures, timeout=timeout):
                 sro_id = futures[future]
                 try:
-                    org["memberships"][sro_id] = future.result()
+                    org["memberships"][sro_id] = future.result(timeout=0)
                     changed = True
                 except Exception:
                     pass
-        except TimeoutError:
+        except (TimeoutError, FuturesTimeoutError):
             pass
+    finally:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            # Python < 3.9 без cancel_futures
+            executor.shutdown(wait=False)
 
     if changed:
         cache[inn] = org
@@ -804,7 +812,8 @@ def format_company_card(inn: str, plany_data: dict | None, reestr_data: dict | N
 
     all_sro_ids = list(dict.fromkeys(list(plany_plans.keys()) + list(reestr_memberships.keys())))
 
-    lines = [f"✅ {display_name}", ""]
+    h = html_escape
+    lines = [f"✅ {h(str(display_name))}", ""]
 
     if not all_sro_ids:
         lines.extend(["📦 СРО: —", "📋 Статус: —", "📅 В реестре с: —", "🔍 Плановая проверка: —"])
@@ -816,8 +825,8 @@ def format_company_card(inn: str, plany_data: dict | None, reestr_data: dict | N
             status = mem.get("status") or "—"
             reg_date = mem.get("reg_date") or "—"
             plan = _format_plan_month(plany_plans.get(sro_id, "не указан"))
-            lines.append(f"\n<b>{sro_name}</b>")
-            lines.append(f"  📋 {status} | 📅 с {reg_date}")
+            lines.append(f"\n<b>{h(str(sro_name))}</b>")
+            lines.append(f"  📋 {h(str(status))} | 📅 с {h(str(reg_date))}")
             vv_line = _format_kf_level_line(
                 mem.get("kf_level_vv"),
                 _format_kf_money(mem.get("kf_sum_vv")),
@@ -832,10 +841,12 @@ def format_company_card(inn: str, plany_data: dict | None, reestr_data: dict | N
                 lines.append(vv_line)
             if odo_line:
                 lines.append(odo_line)
-            lines.append(f"  🔍 Плановая проверка: {plan}")
+            lines.append(f"  🔍 Плановая проверка: {h(str(plan))}")
             latest_disciplinary = mem.get("latest_disciplinary")
             if latest_disciplinary:
-                lines.append(f"  ⚠️ Дисциплина: {_format_discipline_line(latest_disciplinary)}")
+                lines.append(
+                    f"  ⚠️ Дисциплина: {h(_format_discipline_line(latest_disciplinary))}"
+                )
             inspections = mem.get("inspections_by_year") or {}
             recent_years = _recent_inspection_years()
             shown_years = sorted((year for year in inspections if year in recent_years), key=int)
@@ -843,10 +854,12 @@ def format_company_card(inn: str, plany_data: dict | None, reestr_data: dict | N
                 lines.append("  📊 Проверки (последние 3 года):")
                 for year in shown_years:
                     result = inspections[year]
-                    lines.append(f"    {year} — {_inspection_icon(result)} {result}")
+                    lines.append(
+                        f"    {h(str(year))} — {_inspection_icon(result)} {h(str(result))}"
+                    )
             url = mem.get("url")
             if url:
-                lines.append(f"  🔗 {url}")
+                lines.append(f"  🔗 {h(str(url))}")
 
     return "\n".join(lines)
 

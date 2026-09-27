@@ -136,6 +136,23 @@ from controller_access import (
     is_controller,
     is_controller_work_mode,
 )
+from bot_core import (
+    CONTROLLER_AI_DENIED,
+    active_input_mode,
+    gate_controller_ai_media,
+    gate_controller_ai_text,
+    prepare_ai_assistant,
+    prepare_controller_ai,
+    prepare_controller_menu,
+    prepare_doc_qa,
+    prepare_faq,
+    prepare_main_menu,
+    prepare_nrs,
+    prepare_search,
+    prepare_welcome_reset,
+)
+from ai_rate_limit import ai_chat_scope
+
 from checko_client import (
     SECTIONS as CHECKO_SECTIONS,
     checko_configured,
@@ -309,18 +326,35 @@ def notify_admins_about_error(func_name: str, event, exc: BaseException) -> bool
     who = html_lib.escape(full or "—")
     if uname:
         who += f" (@{html_lib.escape(uname)})"
-    body = (
-        "🚨 <b>Ошибка бота СРО</b>\n\n"
-        f"Функция: <code>{html_lib.escape(func_name)}</code>\n"
-        f"Пользователь: {who}\n"
-        f"chat_id: <code>{chat_id}</code>\n"
-        f"Нажал / написал:\n<code>{html_lib.escape(action[:500])}</code>\n\n"
-        f"<b>{html_lib.escape(type(exc).__name__)}</b>: "
-        f"{html_lib.escape(exc_text[:400])}\n\n"
-        f"<pre>{html_lib.escape(tb_short)}</pre>"
-    )
+    action_cut = action[:500]
+    exc_cut = exc_text[:400]
+    tb_budget = 1800
+    if len(tb_short) > tb_budget:
+        tb_short = "…\n" + tb_short[-tb_budget:]
+
+    def _alert_body(tb: str, act: str, exc_s: str) -> str:
+        return (
+            "🚨 <b>Ошибка бота СРО</b>\n\n"
+            f"Функция: <code>{html_lib.escape(func_name)}</code>\n"
+            f"Пользователь: {who}\n"
+            f"chat_id: <code>{chat_id}</code>\n"
+            f"Нажал / написал:\n<code>{html_lib.escape(act)}</code>\n\n"
+            f"<b>{html_lib.escape(type(exc).__name__)}</b>: "
+            f"{html_lib.escape(exc_s)}\n\n"
+            f"<pre>{html_lib.escape(tb)}</pre>"
+        )
+
+    body = _alert_body(tb_short, action_cut, exc_cut)
+    # Не режем готовый HTML посередине тега — укорачиваем traceback / action.
+    while len(body) > 4000 and len(tb_short) > 200:
+        keep = max(200, len(tb_short) - 400)
+        tb_short = "…\n" + tb_short[-keep:]
+        body = _alert_body(tb_short, action_cut, exc_cut)
+    while len(body) > 4000 and len(action_cut) > 80:
+        action_cut = action_cut[: max(40, len(action_cut) - 100)] + "…"
+        body = _alert_body(tb_short, action_cut, exc_cut)
     if len(body) > 4000:
-        body = body[:3900] + "\n…</pre>"
+        body = _alert_body(tb_short[:400], action_cut[:80], exc_cut[:200])
 
     ok_any = False
     for admin_id in _bot_admin_chat_ids():
@@ -1191,6 +1225,15 @@ def send_blanki_file(chat_id: int, path_file: str, caption: str, error_text: str
             bot.send_document(chat_id, file, caption=full_caption, parse_mode="HTML")
     except Exception:
         bot.send_message(chat_id, error_text, parse_mode="HTML")
+    finally:
+        try:
+            import tempfile as _tmpmod
+
+            p = os.path.abspath(path_file)
+            if p.startswith(os.path.abspath(_tmpmod.gettempdir()) + os.sep):
+                os.remove(p)
+        except OSError:
+            pass
 
 
 def _download_docs_intro(chat_id: int) -> str:
@@ -1326,6 +1369,15 @@ def _send_info_list_document(
                     "проверьте шаблон вручную.</i>"
                 )
         else:
+            if filled_path:
+                try:
+                    import tempfile as _tmpmod
+
+                    p = os.path.abspath(filled_path)
+                    if p.startswith(os.path.abspath(_tmpmod.gettempdir()) + os.sep):
+                        os.remove(p)
+                except OSError:
+                    pass
             send_caption = (
                 f"{caption}\n\n"
                 "⚠️ <i>Автозаполнение не удалось (нет данных в реестре или ошибка шаблона). "
@@ -1532,6 +1584,15 @@ def handle_blanki_menu_text(chat_id: int, user_text: str, sro_files_root: str) -
                     "проверьте шаблон вручную.</i>"
                 )
         else:
+            if filled_path:
+                try:
+                    import tempfile as _tmpmod
+
+                    p = os.path.abspath(filled_path)
+                    if p.startswith(os.path.abspath(_tmpmod.gettempdir()) + os.sep):
+                        os.remove(p)
+                except OSError:
+                    pass
             send_caption = (
                 f"{caption}\n\n"
                 "⚠️ <i>Автозаполнение не удалось (нет данных в реестре или ошибка шаблона). "
@@ -1598,20 +1659,13 @@ def get_controller_ai_keyboard():
 
 
 def open_controller_ai(chat_id: int) -> None:
-    if not is_controller(chat_id):
+    if not prepare_controller_ai(chat_id):
         safe_send_message(
             chat_id,
-            "⛔ Режим «🎙 ИИ-помощник» доступен только сотрудникам контроля.",
+            CONTROLLER_AI_DENIED,
             parse_mode="HTML",
         )
         return
-    exit_ai_mode(chat_id)
-    exit_faq_mode(chat_id)
-    exit_search_mode(chat_id)
-    exit_doc_ask_mode(chat_id)
-    exit_nrs_link_mode(chat_id)
-    enter_controller_work_mode(chat_id)
-    enter_controller_ai_mode(chat_id)
     finish_button_reply(
         chat_id,
         CONTROLLER_AI_HINT,
@@ -1665,20 +1719,21 @@ def _send_controller_ai_text(chat_id: int, question: str) -> None:
         pass
     from controller_ai import get_upload_context
 
-    # Только явное уточнение по уже присланному файлу — без автоподсказок сайта
-    doc_text, _name = get_upload_context(chat_id)
-    if doc_text and (looks_like_doc_followup(q) or _seems_about_last_doc(q)):
-        reply = answer_about_upload(q, chat_id)
-        safe_send_message(
-            chat_id,
-            reply,
-            parse_mode="HTML",
-            reply_markup=get_controller_ai_keyboard(),
-        )
-        return
+    with ai_chat_scope(chat_id):
+        # Только явное уточнение по уже присланному файлу — без автоподсказок сайта
+        doc_text, _name = get_upload_context(chat_id)
+        if doc_text and (looks_like_doc_followup(q) or _seems_about_last_doc(q)):
+            reply = answer_about_upload(q, chat_id)
+            safe_send_message(
+                chat_id,
+                reply,
+                parse_mode="HTML",
+                reply_markup=get_controller_ai_keyboard(),
+            )
+            return
 
-    # Свободный ответ OpenRouter — без маршрутизации в «план проверок» и разделы сайта
-    reply = controller_free_chat(q)
+        # Свободный ответ OpenRouter — без маршрутизации в «план проверок» и разделы сайта
+        reply = controller_free_chat(q)
     safe_send_message(
         chat_id,
         reply,
@@ -1688,10 +1743,8 @@ def _send_controller_ai_text(chat_id: int, question: str) -> None:
 
 
 def handle_controller_ai_voice(message) -> bool:
-    if not is_controller_ai_mode(message.chat.id):
-        return False
-    if not is_controller(message.chat.id):
-        exit_controller_ai_mode(message.chat.id)
+    _media = gate_controller_ai_media(message.chat.id)
+    if _media != "pass":
         return False
     safe_send_message(message.chat.id, "🎧 Распознаю голос…")
     try:
@@ -1739,10 +1792,7 @@ def handle_controller_ai_voice(message) -> bool:
 
 
 def handle_controller_ai_document(message) -> bool:
-    if not is_controller_ai_mode(message.chat.id):
-        return False
-    if not is_controller(message.chat.id):
-        exit_controller_ai_mode(message.chat.id)
+    if gate_controller_ai_media(message.chat.id) != "pass":
         return False
     doc = message.document
     fname = safe_filename(getattr(doc, "file_name", None) or "document")
@@ -1770,7 +1820,8 @@ def handle_controller_ai_document(message) -> bool:
             wait += "\nЕсли это скан — разбираю весь PDF целиком (OCR), обычно 1–2 минуты."
         safe_send_message(message.chat.id, wait)
         data, _path = tg_download_file(doc.file_id)
-        raw = extract_text_from_bytes(data, fname)
+        with ai_chat_scope(message.chat.id):
+            raw = extract_text_from_bytes(data, fname)
     except Exception as exc:
         logging.exception("document extract failed")
         hint = (
@@ -1798,16 +1849,20 @@ def handle_controller_ai_document(message) -> bool:
         return True
     remember_upload(message.chat.id, raw, fname)
     caption = (getattr(message, "caption", None) or "").strip()
-    summary = summarize_upload_for_controller(raw, fname)
+    with ai_chat_scope(message.chat.id):
+        summary = summarize_upload_for_controller(raw, fname)
+        follow = (
+            answer_about_upload(caption, message.chat.id)
+            if caption and len(caption) >= 3
+            else None
+        )
     safe_send_message(
         message.chat.id,
         f"📄 <b>{_html_escape_local(fname)}</b>\n\n{summary}",
         parse_mode="HTML",
         reply_markup=get_controller_ai_keyboard(),
     )
-    # Подпись к файлу — отдельный ответ по документу
-    if caption and len(caption) >= 3:
-        follow = answer_about_upload(caption, message.chat.id)
+    if follow:
         safe_send_message(
             message.chat.id,
             follow,
@@ -1818,10 +1873,7 @@ def handle_controller_ai_document(message) -> bool:
 
 
 def handle_controller_ai_photo(message) -> bool:
-    if not is_controller_ai_mode(message.chat.id):
-        return False
-    if not is_controller(message.chat.id):
-        exit_controller_ai_mode(message.chat.id)
+    if gate_controller_ai_media(message.chat.id) != "pass":
         return False
     photos = message.photo or []
     if not photos:
@@ -1833,7 +1885,8 @@ def handle_controller_ai_photo(message) -> bool:
         mime = "image/jpeg"
         if (path or "").lower().endswith(".png"):
             mime = "image/png"
-        raw = extract_text_from_image(data, mime=mime)
+        with ai_chat_scope(message.chat.id):
+            raw = extract_text_from_image(data, mime=mime)
     except RuntimeError as exc:
         if "vision" in str(exc) or "openrouter" in str(exc):
             safe_send_message(
@@ -1860,7 +1913,8 @@ def handle_controller_ai_photo(message) -> bool:
         return True
     name = "фото документа"
     remember_upload(message.chat.id, raw, name)
-    summary = summarize_upload_for_controller(raw, name)
+    with ai_chat_scope(message.chat.id):
+        summary = summarize_upload_for_controller(raw, name)
     safe_send_message(
         message.chat.id,
         f"🖼 <b>{name}</b>\n\n{summary}",
@@ -1899,7 +1953,7 @@ def send_ai_reply(chat_id: int, question: str) -> None:
         markup.add(
             types.InlineKeyboardButton("👎 Ответ не помог", callback_data=FB_CALLBACK)
         )
-    bot.send_message(chat_id, answer, parse_mode="HTML", reply_markup=markup)
+    safe_send_message(chat_id, answer, parse_mode="HTML", reply_markup=markup)
 
 
 def prompt_feedback_expected(chat_id: int) -> None:
@@ -2105,8 +2159,7 @@ def get_faq_ai_inline():
 
 
 def start_faq_ai_chat(chat_id):
-    exit_search_mode(chat_id)
-    enter_ai_mode(chat_id)
+    prepare_ai_assistant(chat_id)
     bot.send_message(chat_id, FAQ_AI_HINT + ai_context_banner(chat_id), parse_mode="HTML")
 
 
@@ -2314,15 +2367,9 @@ def controller_menu_text() -> str:
 
 
 def open_controller_menu(chat_id: int) -> None:
-    exit_ai_mode(chat_id)
-    exit_controller_ai_mode(chat_id)
-    exit_faq_mode(chat_id)
-    exit_search_mode(chat_id)
-    exit_doc_ask_mode(chat_id)
-    exit_nrs_link_mode(chat_id)
+    prepare_controller_menu(chat_id)
     clear_await_inn(chat_id)
     clear_onboarding_flags(chat_id)
-    enter_controller_work_mode(chat_id)
     finish_button_reply(
         chat_id,
         controller_menu_text(),
@@ -2386,11 +2433,9 @@ def _context_ready_text(chat_id: int) -> str:
     )
 
 def _open_org_search(chat_id: int, *, intro: str | None = None) -> None:
-    exit_ai_mode(chat_id)
-    exit_faq_mode(chat_id)
+    prepare_search(chat_id)
     clear_await_inn(chat_id)
     clear_joiner_activity_await(chat_id)
-    enter_search_mode(chat_id)
     text = intro or (
         "🏢 <b>Универсальный поиск</b>\n\n"
         "Введите <b>ИНН</b> (только цифры) или часть названия "
@@ -2585,12 +2630,7 @@ def get_download_docs_keyboard(chat_id: int | None = None):
 @log_errors  # Наш защитный щит от ошибок тоже вешаем сюда!
 def send_welcome(message):
     touch_user(message, event="start")
-    exit_ai_mode(message.chat.id)
-    exit_faq_mode(message.chat.id)
-    exit_search_mode(message.chat.id)
-    exit_doc_ask_mode(message.chat.id)
-    exit_nrs_link_mode(message.chat.id)
-    exit_controller_work_mode(message.chat.id)
+    prepare_welcome_reset(message.chat.id)
     cancel_await_expected(message.chat.id)
     cancel_info_list_quiz(message.chat.id)
     begin_await_inn(message.chat.id)
@@ -2641,10 +2681,7 @@ def send_controller_command(message):
 
 def restart_org_onboarding(chat_id: int) -> None:
     """Сброс контекста СРО → снова ввод ИНН или «Пропустить» без ИНН."""
-    exit_ai_mode(chat_id)
-    exit_faq_mode(chat_id)
-    exit_search_mode(chat_id)
-    exit_controller_work_mode(chat_id)
+    prepare_welcome_reset(chat_id)
     cancel_await_expected(chat_id)
     cancel_info_list_quiz(chat_id)
     clear_user_sro(chat_id)
@@ -2751,8 +2788,7 @@ def send_update_notice_command(message):
 @bot.message_handler(commands=['help'])
 @log_errors
 def send_help(message):
-    exit_ai_mode(message.chat.id)
-    exit_faq_mode(message.chat.id)
+    prepare_main_menu(message.chat.id)
     help_text = """ℹ️ <b>Справка по боту</b>
 
 <b>Команды</b> (кнопка Menu слева от поля ввода):
@@ -2782,9 +2818,7 @@ def send_help(message):
 @bot.message_handler(commands=['search'])
 @log_errors
 def send_search_command(message):
-    exit_ai_mode(message.chat.id)
-    exit_faq_mode(message.chat.id)
-    enter_search_mode(message.chat.id)
+    prepare_search(message.chat.id)
     bot.send_message(
         message.chat.id,
         "🏢 <b>Универсальный поиск</b>\n\n"
@@ -2797,8 +2831,7 @@ def send_search_command(message):
 @bot.message_handler(commands=['info'])
 @log_errors
 def send_info_command(message):
-    exit_ai_mode(message.chat.id)
-    enter_faq_mode(message.chat.id)
+    prepare_faq(message.chat.id)
     bot.send_message(
         message.chat.id,
         "Здесь вы можете найти ответы на частые вопросы и скачать бланки:",
@@ -2857,6 +2890,13 @@ def handle_text(message):
             finish_feedback(message.chat.id, user_text)
         return
 
+    if is_info_list_quiz_active(message.chat.id):
+        # «Назад» / команды меню — не ответы опроса
+        if user_text == BACK_TO_MENU_BUTTON or resolve_navigation_command(user_text):
+            cancel_info_list_quiz(message.chat.id)
+        else:
+            _handle_info_list_quiz_text(message.chat.id, user_text)
+            return
 
     if is_feedback_phrase(user_text):
         prompt_feedback_expected(message.chat.id)
@@ -2870,9 +2910,7 @@ def handle_text(message):
         if is_controller_work_mode(message.chat.id):
             open_controller_menu(message.chat.id)
             return
-        exit_ai_mode(message.chat.id)
-        exit_faq_mode(message.chat.id)
-        exit_search_mode(message.chat.id)
+        prepare_main_menu(message.chat.id)
         bot.send_message(
             message.chat.id,
             "📋 <b>Главное меню</b> — выберите раздел на клавиатуре ниже:",
@@ -2892,14 +2930,10 @@ def handle_text(message):
 
     if user_text == BACK_TO_MENU_BUTTON:
         was_controller_ai = is_controller_ai_mode(message.chat.id)
-        exit_ai_mode(message.chat.id)
-        exit_controller_ai_mode(message.chat.id)
-        exit_faq_mode(message.chat.id)
-        exit_search_mode(message.chat.id)
-        exit_doc_ask_mode(message.chat.id)
-        exit_nrs_link_mode(message.chat.id)
+        prepare_main_menu(message.chat.id)
         clear_nav_mode_flags(message.chat.id)
         cancel_await_expected(message.chat.id)
+        cancel_info_list_quiz(message.chat.id)
         if was_controller_ai or is_controller_work_mode(message.chat.id):
             open_controller_menu(message.chat.id)
             return
@@ -2909,6 +2943,13 @@ def handle_text(message):
             reply_markup=get_main_keyboard(message.chat.id),
         )
         return
+
+    if not _is_reply_menu_button(user_text):
+        if active_input_mode(message.chat.id) == "controller_ai":
+            if gate_controller_ai_text(message.chat.id) == "pass":
+                _send_controller_ai_text(message.chat.id, user_text)
+                return
+            # deny: режим уже сброшен в bot_core
 
     if try_nrs_text_reply(message.chat.id, user_text):
         return
@@ -3058,10 +3099,7 @@ def handle_text(message):
         if is_controller_work_mode(message.chat.id):
             open_controller_ai(message.chat.id)
             return
-        exit_faq_mode(message.chat.id)
-        exit_search_mode(message.chat.id)
-        exit_controller_ai_mode(message.chat.id)
-        enter_ai_mode(message.chat.id)
+        prepare_ai_assistant(message.chat.id)
         finish_button_reply(message.chat.id, AI_MODE_HINT + ai_context_banner(message.chat.id))
         return
 
@@ -3070,10 +3108,6 @@ def handle_text(message):
         return
 
     if user_text == NRS_LINK_BUTTON:
-        exit_ai_mode(message.chat.id)
-        exit_faq_mode(message.chat.id)
-        exit_search_mode(message.chat.id)
-        exit_doc_ask_mode(message.chat.id)
         if not can_use_nrs_link_pilot(message.chat.id, get_user_sro_id(message.chat.id)):
             finish_button_reply(
                 message.chat.id,
@@ -3082,7 +3116,7 @@ def handle_text(message):
                 reply_markup=get_main_keyboard(message.chat.id),
             )
             return
-        enter_nrs_link_mode(message.chat.id)
+        prepare_nrs(message.chat.id)
         finish_button_reply(
             message.chat.id,
             format_nrs_link_intro(),
@@ -3090,11 +3124,13 @@ def handle_text(message):
         )
         return
 
-    if user_text == DOC_QA_BUTTON:
-        exit_ai_mode(message.chat.id)
-        exit_faq_mode(message.chat.id)
-        exit_search_mode(message.chat.id)
-        enter_doc_ask_mode(message.chat.id)
+    if user_text in (DOC_QA_BUTTON, DOC_QA_ASK_BUTTON) and not is_bot_admin(
+        message.chat.id
+    ):
+        exit_doc_ask_mode(message.chat.id)
+        # не пилот — дальше обычный поток (поиск / ИИ / FAQ)
+    elif user_text == DOC_QA_BUTTON and is_bot_admin(message.chat.id):
+        prepare_doc_qa(message.chat.id)
         sro_id = get_user_sro_id(message.chat.id)
         finish_button_reply(
             message.chat.id,
@@ -3102,11 +3138,8 @@ def handle_text(message):
             reply_markup=get_doc_qa_keyboard(),
         )
         return
-
-    if user_text == DOC_QA_ASK_BUTTON:
-        exit_ai_mode(message.chat.id)
-        exit_faq_mode(message.chat.id)
-        enter_doc_ask_mode(message.chat.id)
+    elif user_text == DOC_QA_ASK_BUTTON and is_bot_admin(message.chat.id):
+        prepare_doc_qa(message.chat.id)
         sro_id = get_user_sro_id(message.chat.id)
         finish_button_reply(
             message.chat.id,
@@ -3116,33 +3149,35 @@ def handle_text(message):
         return
 
     if is_doc_ask_mode(message.chat.id):
-        sro_id = get_user_sro_id(message.chat.id)
-        if user_text in (DOC_QA_BUTTON, DOC_QA_ASK_BUTTON):
-            finish_button_reply(
+        if not is_bot_admin(message.chat.id):
+            exit_doc_ask_mode(message.chat.id)
+        else:
+            sro_id = get_user_sro_id(message.chat.id)
+            if user_text in (DOC_QA_BUTTON, DOC_QA_ASK_BUTTON):
+                finish_button_reply(
+                    message.chat.id,
+                    format_doc_qa_hint(sro_id),
+                    reply_markup=get_doc_qa_keyboard(),
+                )
+                return
+            bot.send_message(message.chat.id, "⏳ Ищу в документах…")
+            result = answer_from_document(
+                user_text, sro_id=sro_id, chat_id=message.chat.id
+            )
+            safe_send_message(
                 message.chat.id,
-                format_doc_qa_hint(sro_id),
+                result.get("text") or "⚠️ Пустой ответ.",
+                parse_mode="HTML",
                 reply_markup=get_doc_qa_keyboard(),
             )
             return
-        bot.send_message(message.chat.id, "⏳ Ищу в документах…")
-        result = answer_from_document(
-            user_text, sro_id=sro_id, chat_id=message.chat.id
-        )
-        bot.send_message(
-            message.chat.id,
-            result.get("text") or "⚠️ Пустой ответ.",
-            parse_mode="HTML",
-            reply_markup=get_doc_qa_keyboard(),
-        )
-        return
 
     if user_text == SEARCH_ORG_BUTTON:
         _open_org_search(message.chat.id)
         return
 
     if user_text == "❓ Полезная информация" or user_text == "❓ Назад в Полезное":
-        exit_ai_mode(message.chat.id)
-        enter_faq_mode(message.chat.id)
+        prepare_faq(message.chat.id)
         finish_button_reply(
             message.chat.id,
             "Здесь вы можете найти ответы на частые вопросы и скачать бланки:",
@@ -3151,7 +3186,7 @@ def handle_text(message):
         return
 
     elif "Часто задаваемые вопросы" in user_text:
-        enter_faq_mode(message.chat.id)
+        prepare_faq(message.chat.id)
         finish_button_reply(
             message.chat.id,
             "Выберите интересующий вас раздел ниже:",
@@ -3160,7 +3195,7 @@ def handle_text(message):
         return
 
     elif "Для вступающих" in user_text:
-        enter_faq_mode(message.chat.id)
+        prepare_faq(message.chat.id)
         finish_button_reply(
             message.chat.id,
             "📁 Раздел: <b>Для вступающих в СРО Ассоциации</b>\n\nВыберите интересующий вас пункт меню ниже:",
@@ -3169,7 +3204,7 @@ def handle_text(message):
         return
 
     elif "Действующим членам" in user_text:
-        enter_faq_mode(message.chat.id)
+        prepare_faq(message.chat.id)
         finish_button_reply(
             message.chat.id,
             "📁 Раздел: <b>Информация для действующих членов СРО</b>",
@@ -3178,7 +3213,7 @@ def handle_text(message):
         return
 
     elif "Специалисты и НОК" in user_text:
-        enter_faq_mode(message.chat.id)
+        prepare_faq(message.chat.id)
         finish_button_reply(
             message.chat.id,
             "📁 Раздел: <b>Национальный реестр (НРС) и экзамены НОК</b>",
@@ -3187,7 +3222,7 @@ def handle_text(message):
         return
 
     elif user_text == BTN_FAQ_SITE_QA:
-        enter_faq_mode(message.chat.id)
+        prepare_faq(message.chat.id)
         profile = _faq_site_profile(message.chat.id)
         sro_name = profile.get("short_title") or profile.get("name") or "вашего СРО"
         finish_button_reply(
@@ -3270,7 +3305,7 @@ def handle_text(message):
         return
 
     elif BTN_FAQ_ASSOC_HUB in user_text or user_text == "🏢 Ассоциация и партнеры":
-        enter_faq_mode(message.chat.id)
+        prepare_faq(message.chat.id)
         finish_button_reply(
             message.chat.id,
             "📁 <b>Ассоциация, партнёры, жалобы</b>\n\nВыберите раздел:",
@@ -3432,7 +3467,7 @@ def handle_text(message):
         return
 
     elif user_text == "📋 Проверяемые документы":
-        enter_faq_mode(message.chat.id)
+        prepare_faq(message.chat.id)
         reply_faq_text(message.chat.id, documents_list_text, user_text, add_footer=False)
         finish_button_reply(
             message.chat.id,
@@ -3627,7 +3662,8 @@ def handle_text(message):
     if handle_blanki_menu_text(message.chat.id, user_text, folder_path):
         return
 
-    if is_search_mode(message.chat.id) and not is_ai_mode(message.chat.id):
+    _mode = active_input_mode(message.chat.id)
+    if _mode == "search":
         handle_universal_search(message.chat.id, user_text)
         return
 
@@ -3643,8 +3679,7 @@ def handle_text(message):
         send_org_not_found(message.chat.id, user_text)
         return
 
-
-    elif is_ai_mode(message.chat.id):
+    if _mode == "ai":
         if should_route_to_ai(user_text):
             send_ai_reply(message.chat.id, user_text)
             return
@@ -3660,7 +3695,7 @@ def handle_text(message):
     if handle_org_name_search(message.chat.id, user_text):
         return
 
-    if is_faq_mode(message.chat.id):
+    if _mode == "faq":
         send_faq_not_found(message.chat.id)
         return
 
@@ -3690,6 +3725,13 @@ def handle_info_list_quiz_callback(call):
             cancel_info_list_quiz(chat_id)
             bot.answer_callback_query(call.id, "Отмена")
             bot.send_message(chat_id, "Ок, без заполнения.")
+            return
+        if action == "ask" and not can_use_info_list_quiz(chat_id):
+            bot.answer_callback_query(call.id, "Нет доступа")
+            bot.send_message(
+                chat_id,
+                "⛔ Заполнение инфолиста вопросами — только для админов и контролёров.",
+            )
             return
         if action == "empty":
             bot.answer_callback_query(call.id, "Пустой шаблон")
@@ -3770,7 +3812,7 @@ def handle_doc_fallback(call):
         result = answer_from_document(
             question, sro_id=get_user_sro_id(chat_id), chat_id=chat_id
         )
-        bot.send_message(
+        safe_send_message(
             chat_id,
             result.get("text") or "⚠️ Пустой ответ.",
             parse_mode="HTML",
@@ -3944,7 +3986,7 @@ def handle_checko_callbacks(call):
     safe_answer_callback(call.id, "Неизвестная команда")
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("ctxnav:"))
+@bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("ctxnav:"))
 @log_errors
 def handle_ctxnav_callbacks(call):
     chat_id = call.message.chat.id
@@ -3966,7 +4008,7 @@ def handle_ctxnav_callbacks(call):
     safe_send_message(chat_id, "Неизвестная команда.", reply_markup=get_main_keyboard(chat_id))
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("search_inn:"))
+@bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("search_inn:"))
 @log_errors
 def handle_inline_search(call):
     inn = call.data.split(":")[1] # Извлекаем ИНН из скрытых данных
@@ -3974,7 +4016,10 @@ def handle_inline_search(call):
 
     if inn in sro_database or inn in reestr_database:
         bot.answer_callback_query(call.id, "⏳ Ищу данные по организации...")
-        bot.delete_message(chat_id, call.message.message_id)
+        try:
+            bot.delete_message(chat_id, call.message.message_id)
+        except Exception:
+            pass
         outcome = present_found_organization(
             chat_id,
             inn,

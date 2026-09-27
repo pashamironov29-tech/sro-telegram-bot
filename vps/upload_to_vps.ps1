@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory = $true)]
     [string]$VpsIp,
     [string]$VpsUser = "root"
@@ -29,6 +29,7 @@ $RuntimeFiles = @(
     "bot_MAX.py",
     "max_api.py",
     "faq_menu_content.py",
+    "sro_news.py",
     "ai_assistant.py",
     "reestr_sync.py",
     "voprosy_faq.py",
@@ -51,6 +52,7 @@ $RuntimeFiles = @(
     "users_log.py",
     "feedback_log.py",
     "controller_access.py",
+    "bot_core.py",
     "checko_client.py",
     "nrs_search_links.py",
     "doc_qa.py",
@@ -82,26 +84,35 @@ if ($LASTEXITCODE -ne 0) {
     Write-Error "Abort upload: controller AI (voice/docs) is NOT wired in bot_FINAL_GOLD.py"
 }
 
-$remote = "${VpsUser}@${VpsIp}:/opt/sro-bot/"
+
+
+$SshKey = Join-Path $env:USERPROFILE ".ssh\id_ed25519_sro"
+$SshOpts = @("-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes")
+if (Test-Path $SshKey) {
+    $SshOpts += @("-i", $SshKey)
+}
+$SshHost = if ($VpsIp -eq "201.24.125.236") { "sro-msk" } else { "${VpsUser}@${VpsIp}" }
+
+$remote = "${SshHost}:/opt/sro-bot/"
 Write-Host "Uploading runtime files to $remote" -ForegroundColor Cyan
 
-ssh "${VpsUser}@${VpsIp}" "mkdir -p /opt/sro-bot/sro_data/plany /opt/sro-bot/sro_data/blanki /opt/sro-bot/vps"
+ssh @SshOpts $SshHost "mkdir -p /opt/sro-bot/sro_data/plany /opt/sro-bot/sro_data/blanki /opt/sro-bot/vps"
 
-scp @RuntimeFiles $remote
-scp reestr_cache.json $remote
-scp -r vps $remote
+scp @SshOpts @RuntimeFiles $remote
+scp @SshOpts reestr_cache.json $remote
+scp @SshOpts -r vps $remote
 
 # TLS for MAX API (корни Минцифры)
 if (Test-Path (Join-Path $ProjectRoot "certs")) {
-    scp -r certs "${VpsUser}@${VpsIp}:/opt/sro-bot/"
+    scp @SshOpts -r certs "${SshHost}:/opt/sro-bot/"
 } else {
     Write-Warning "certs/ not found - MAX TLS may fail on VPS"
 }
 
 if (Test-Path $SroFiles) {
-    scp -r "$SroFiles\plany" "${VpsUser}@${VpsIp}:/opt/sro-bot/sro_data/"
+    scp @SshOpts -r "$SroFiles\plany" "${SshHost}:/opt/sro-bot/sro_data/"
     if (Test-Path "$SroFiles\blanki") {
-        scp -r "$SroFiles\blanki" "${VpsUser}@${VpsIp}:/opt/sro-bot/sro_data/"
+        scp @SshOpts -r "$SroFiles\blanki" "${SshHost}:/opt/sro-bot/sro_data/"
     }
 }
 

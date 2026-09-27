@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
+from html import escape as html_escape
+from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
@@ -17,7 +20,12 @@ import requests
 NOSTROY_NRS = "https://nrs.nostroy.ru/"
 NOPRIZ_NRS = "https://nrs.nopriz.ru/"
 NOPRIZ_API_LIST = "https://nrs.nopriz.ru/api/specialist/list"
-_MODE_FILE = os.path.join(os.path.dirname(__file__), "nrs_link_mode.json")
+_plat = (os.getenv("BOT_PLATFORM") or "tg").strip().lower()
+_plat = "max" if _plat == "max" else "tg"
+_MODE_DIR = Path(__file__).resolve().parent
+_MODE_FILE = str(_MODE_DIR / f"nrs_link_mode_{_plat}.json")
+_LEGACY_MODE_FILE = str(_MODE_DIR / "nrs_link_mode.json")
+_nrs_mode_lock = threading.Lock()
 
 # False = только BOT_ADMIN_IDS + ОГПС (пилот). True = кнопка всем пользователям.
 NRS_LINK_FOR_ALL = True
@@ -31,23 +39,36 @@ _nopriz_last_call: dict[int, float] = {}
 _NOPRIZ_COOLDOWN_SEC = 2.0
 
 
+def _h(text) -> str:
+    return html_escape(str(text or ""), quote=False)
+
+
 def _load_nrs_mode_users() -> set[int]:
-    try:
-        with open(_MODE_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return {int(x) for x in data}
-    except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
-        pass
+    # Legacy общий файл — только TG (см. sro_context): MAX не подхватывает чужие ID.
+    paths = [_MODE_FILE]
+    if _plat == "tg":
+        paths.append(_LEGACY_MODE_FILE)
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return {int(x) for x in data}
+        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+            continue
     return set()
 
 
 def _save_nrs_mode_users() -> None:
-    try:
-        with open(_MODE_FILE, "w", encoding="utf-8") as f:
-            json.dump(sorted(_await_nrs_query), f)
-    except OSError:
-        pass
+    with _nrs_mode_lock:
+        try:
+            snap = sorted(list(_await_nrs_query))
+            tmp = _MODE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(snap, f)
+            os.replace(tmp, _MODE_FILE)
+        except OSError:
+            pass
 
 
 _await_nrs_query = _load_nrs_mode_users()
@@ -280,9 +301,9 @@ def _format_nopriz_work_lines(work_types: list[dict]) -> list[str]:
         short = wt.get("short") or wt.get("code") or "вид работ"
         cert = (wt.get("cert_date") or "").strip()
         if cert:
-            lines.append(f"• {short} — {status_l} (НОК {cert})")
+            lines.append(f"• {_h(short)} — {_h(status_l)} (НОК {_h(cert)})")
         else:
-            lines.append(f"• {short} — {status_l}")
+            lines.append(f"• {_h(short)} — {_h(status_l)}")
     return lines
 
 
@@ -358,8 +379,8 @@ def _nopriz_lookup_by_number(
 
 def _a(url: str, title: str) -> str:
     # Короткий текст ссылки; длинный URL только в href
-    safe = url.replace('"', "%22")
-    return f'<a href="{safe}">{title}</a>'
+    safe = html_escape(str(url or ""), quote=True)
+    return f'<a href="{safe}">{_h(title)}</a>'
 
 
 def format_nrs_link_intro() -> str:
@@ -417,23 +438,23 @@ def format_nrs_link_reply(query: str, chat_id: int | None = None) -> str:
             show_num = nopriz_hit["registrationNumber"]
         else:
             show_num = number
-        lines.append(f"🔗 <b>{fio}</b> · номер <code>{show_num}</code>")
+        lines.append(f"🔗 <b>{_h(fio)}</b> · номер <code>{_h(show_num)}</code>")
     elif number:
         nostroy_num = _nostroy_registration(number)
         show = nostroy_num or number
         if nostroy_num and nostroy_num.upper() != number.upper() and is_nostroy:
             lines.append(
-                f"🔗 Номер для НОСТРОЙ: <code>{show}</code>\n"
-                f"(ввели: <code>{number}</code>)"
+                f"🔗 Номер для НОСТРОЙ: <code>{_h(show)}</code>\n"
+                f"(ввели: <code>{_h(number)}</code>)"
             )
         else:
-            lines.append(f"🔗 Поиск по номеру: <code>{show}</code>")
+            lines.append(f"🔗 Поиск по номеру: <code>{_h(show)}</code>")
             if is_nostroy:
                 lines.append(
                     "<i>ФИО — только на сайте НОСТРОЙ после перехода по ссылке.</i>"
                 )
     else:
-        lines.append(f"🔗 Поиск по ФИО: <b>{fio}</b>")
+        lines.append(f"🔗 Поиск по ФИО: <b>{_h(fio)}</b>")
 
     # НОСТРОЙ
     lines.append("")
@@ -441,7 +462,7 @@ def format_nrs_link_reply(query: str, chat_id: int | None = None) -> str:
     if block_nostroy:
         reg = (nopriz_hit or {}).get("registrationNumber") or number or "П-/ПИ-…"
         lines.append(
-            f"<i>⛔ Номер НОПРИЗ (<code>{reg}</code>) — другой реестр. "
+            f"<i>⛔ Номер НОПРИЗ (<code>{_h(reg)}</code>) — другой реестр. "
             "Поиск строителей по нему закрыт.</i>"
         )
     else:
@@ -454,14 +475,14 @@ def format_nrs_link_reply(query: str, chat_id: int | None = None) -> str:
     if block_nopriz:
         show = _nostroy_registration(number) or number
         lines.append(
-            f"<i>⛔ Номер строителя (<code>{show}</code>) — другой реестр. "
+            f"<i>⛔ Номер строителя (<code>{_h(show)}</code>) — другой реестр. "
             "Поиск в НОПРИЗ по нему закрыт.</i>"
         )
     elif number and is_nopriz:
         reg = (nopriz_hit or {}).get("registrationNumber") or number
         if nopriz_hit:
             lines.append(
-                f"{nopriz_hit['fio']} · <code>{reg}</code>\n"
+                f"{_h(nopriz_hit['fio'])} · <code>{_h(reg)}</code>\n"
                 + _a(_nopriz_url(number=reg), "➡️ Открыть в НОПРИЗ")
             )
             lines.extend(_format_nopriz_work_lines(nopriz_hit.get("work_types") or []))
@@ -471,7 +492,7 @@ def format_nrs_link_reply(query: str, chat_id: int | None = None) -> str:
     elif nopriz_hit:
         m = nopriz_hit
         lines.append(
-            f"{m['fio']} · <code>{m['registrationNumber']}</code>\n"
+            f"{_h(m['fio'])} · <code>{_h(m['registrationNumber'])}</code>\n"
             + _a(_nopriz_url(number=m["registrationNumber"]), "➡️ Открыть в НОПРИЗ")
         )
         lines.extend(_format_nopriz_work_lines(m.get("work_types") or []))
@@ -492,7 +513,7 @@ def format_nrs_link_reply(query: str, chat_id: int | None = None) -> str:
                 lines.append(f"Найдено в НОПРИЗ: <b>{shown}</b>")
             for m in nopriz_matches[:5]:
                 lines.append(
-                    f"• {m['fio']} · <code>{m['registrationNumber']}</code> — "
+                    f"• {_h(m['fio'])} · <code>{_h(m['registrationNumber'])}</code> — "
                     + _a(_nopriz_url(number=m["registrationNumber"]), "открыть")
                 )
             lines.append(

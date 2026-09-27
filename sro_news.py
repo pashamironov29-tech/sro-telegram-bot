@@ -224,11 +224,13 @@ def format_news_message(limit: int = _SHOW_DEFAULT, *, force_refresh: bool = Fal
         f"<i>Обновлено: {updated}</i>",
         "",
     ]
+    from html import escape as _esc
+
     for i, it in enumerate(items, 1):
         src = it.get("source_name") or it.get("source") or ""
-        title = (it.get("title") or "").replace("<", "&lt;").replace(">", "&gt;")
-        url = it.get("url") or ""
-        lines.append(f"{i}. <b>[{src}]</b> {title}")
+        title = _esc(it.get("title") or "")
+        url = _esc(it.get("url") or "", quote=True)
+        lines.append(f"{i}. <b>[{_esc(src)}]</b> {title}")
         lines.append(f'   <a href="{url}">открыть</a>')
         lines.append("")
     lines.append("⚠️ <i>Кратко по заголовкам. Полный текст — по ссылке. Не юридическая консультация.</i>")
