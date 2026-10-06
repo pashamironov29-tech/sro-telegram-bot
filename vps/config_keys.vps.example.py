@@ -6,8 +6,17 @@ SRO_FILES_DIR = "/opt/sro-bot/sro_data"
 
 GROQ_API_KEY = "YOUR_GROQ_API_KEY"
 
-# Основной ИИ (отдельный ключ от MC)
+# Основной ИИ. На VPS удобнее /opt/sro-bot/.env (см. .env.example в корне).
+# deepseek — напрямую, без нидерландского прокси. openrouter — прежний путь.
+LLM_PROVIDER = "deepseek"
+DEEPSEEK_API_KEY = ""
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-chat"
+
+# OpenRouter, если LLM_PROVIDER=openrouter (отдельный ключ от MC)
 OPENROUTER_API_KEY = "YOUR_OPENROUTER_API_KEY"
+# Прокси OpenRouter. Пусто — прямой openrouter.ai. Для deepseek не используется.
+OPENROUTER_BASE = ""
 OPENROUTER_MODEL = "openai/gpt-4.1"
 # Сканы/PDF контролёра (если пусто — openai/gpt-4.1)
 OPENROUTER_DOC_MODEL = "google/gemini-2.5-flash"

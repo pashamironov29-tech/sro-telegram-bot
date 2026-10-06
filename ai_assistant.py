@@ -1,19 +1,11 @@
-"""ИИ-помощник СРО: OpenRouter → GigaChat (РФ) → Groq подбирает раздел srogen.ru."""
+"""ИИ-помощник СРО: DeepSeek или OpenRouter → GigaChat (РФ) → Groq подбирает раздел srogen.ru."""
 
 import re
 from difflib import SequenceMatcher
 
 import requests
 
-try:
-    from config_keys import OPENROUTER_API_KEY as _CFG_OR_KEY
-    from config_keys import OPENROUTER_MODEL as _CFG_OR_MODEL
-except ImportError:
-    _CFG_OR_KEY = ""
-    _CFG_OR_MODEL = "openai/gpt-4.1-mini"
-
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_DEFAULT_MODEL = "openai/gpt-4.1-mini"
+from llm_client import create_llm_client, missing_key_name
 
 try:
     from gigachat_client import chat_completion as _gigachat_chat
@@ -1361,34 +1353,15 @@ def _parse_topic_id(answer):
     return topic_id.strip(".,:;\"'")
 
 
-def _openrouter_key():
-    return (_CFG_OR_KEY or "").strip()
-
-
-def _openrouter_model():
-    return (_CFG_OR_MODEL or OPENROUTER_DEFAULT_MODEL).strip() or OPENROUTER_DEFAULT_MODEL
-
-
-def _ask_openrouter_topic(question, api_key):
+def _ask_primary_topic(question):
     prompt = _topic_router_prompt(question)
-    response = requests.post(
-        OPENROUTER_URL,
-        headers={
-            "Authorization": f"Bearer {api_key.strip()}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://www.srogen.ru",
-            "X-Title": "SRO GOLD Bot",
-        },
-        json={
-            "model": _openrouter_model(),
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": 32,
-        },
+    answer = create_llm_client().complete(
+        [{"role": "user", "content": prompt}],
+        max_tokens=32,
+        temperature=0,
         timeout=45,
+        extra_headers={"X-Title": "SRO GOLD Bot"},
     )
-    response.raise_for_status()
-    answer = response.json()["choices"][0]["message"]["content"]
     return _parse_topic_id(answer)
 
 
@@ -1423,11 +1396,11 @@ def _ask_gigachat_topic(question):
 
 
 def _ask_topic_id(question, groq_api_key):
-    """OpenRouter → GigaChat (РФ) → Groq. Ошибки верхнего → следующий."""
-    or_key = _openrouter_key()
-    if or_key:
+    """DeepSeek или OpenRouter → GigaChat (РФ) → Groq. Ошибки верхнего → следующий."""
+    client = create_llm_client()
+    if client.api_key:
         try:
-            return _ask_openrouter_topic(question, or_key), "openrouter"
+            return _ask_primary_topic(question), client.provider
         except Exception:
             pass
     if _gigachat_ok():
@@ -1449,7 +1422,7 @@ def match_topic_local(question):
 
 
 def get_ai_response_groq(question, api_key, chat_id=None, profile=None):
-    """Подбор раздела: OpenRouter → GigaChat (РФ) → Groq."""
+    """Подбор раздела: DeepSeek или OpenRouter → GigaChat (РФ) → Groq."""
     try:
         from ai_rate_limit import consume_paid_ai
 
@@ -1467,15 +1440,16 @@ def get_ai_response_groq(question, api_key, chat_id=None, profile=None):
 
         explicit_sro = bool(get_user_sro_id(chat_id)) if chat_id is not None else False
 
-    or_key = _openrouter_key()
+    primary_ok = bool(create_llm_client().api_key)
     groq_ok = bool(api_key and api_key.strip())
-    if not or_key and not _gigachat_ok() and not groq_ok:
+    if not primary_ok and not _gigachat_ok() and not groq_ok:
+        key_name = missing_key_name()
         return {
             "ok": False,
             "text": (
                 "⚠️ ИИ-помощник пока не настроен.\n\n"
                 "Нужен ключ:\n"
-                "1. OpenRouter → OPENROUTER_API_KEY\n"
+                f"1. {key_name} в .env (LLM_PROVIDER=deepseek или openrouter)\n"
                 "2. Или GigaChat (Сбер, РФ) → GIGACHAT_CREDENTIALS\n"
                 "3. Или Groq → GROQ_API_KEY\n"
                 "4. Перезапустите бота\n\n"
