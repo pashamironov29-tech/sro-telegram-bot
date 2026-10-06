@@ -1891,7 +1891,7 @@ def handle_controller_ai_photo(message) -> bool:
         if "vision" in str(exc) or "openrouter" in str(exc):
             safe_send_message(
                 message.chat.id,
-                "⚠️ Разбор фото нужен OPENROUTER_API_KEY.\n"
+                "⚠️ Разбор фото нужен ключ ИИ (DEEPSEEK_API_KEY или OPENROUTER_API_KEY).\n"
                 "Пришлите PDF/Word или напишите текстом.",
                 parse_mode="HTML",
                 reply_markup=get_controller_ai_keyboard(),

@@ -1388,7 +1388,7 @@ def handle_controller_ai_attachments(user_id: int, update: dict) -> bool:
             if "openrouter" in msg or "vision" in msg or "no_openrouter" in msg:
                 send(
                     user_id,
-                    "⚠️ Нужен OPENROUTER_API_KEY — распознавание голоса/фото недоступно.\n"
+                    "⚠️ Нужен ключ ИИ (DEEPSEEK_API_KEY или OPENROUTER_API_KEY) — распознавание фото недоступно.\n"
                     "Напишите текстом или пришлите PDF/Word.",
                     _cai_kb(),
                 )

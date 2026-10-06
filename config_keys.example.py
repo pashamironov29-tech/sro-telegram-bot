@@ -4,7 +4,16 @@ SRO_FILES_DIR = r"C:\Users\User\OneDrive\Рабочие\GOLD\sro files"
 # Запасной: https://console.groq.com/keys
 GROQ_API_KEY = "YOUR_GROQ_API_KEY"
 
-# Основной ИИ: https://openrouter.ai/keys
+# Основной ИИ. Те же имена можно задать в .env (см. .env.example) — они важнее.
+# deepseek — напрямую https://api.deepseek.com, без прокси.
+# openrouter — прежний путь через OPENROUTER_BASE (прокси в Нидерландах).
+LLM_PROVIDER = "deepseek"
+DEEPSEEK_API_KEY = ""
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+# deepseek-chat снят 24.07.2026; бот подставляет deepseek-flash и выключает thinking.
+DEEPSEEK_MODEL = "deepseek-chat"
+
+# OpenRouter, если LLM_PROVIDER=openrouter: https://openrouter.ai/keys
 OPENROUTER_API_KEY = "YOUR_OPENROUTER_API_KEY"
 # Прокси OpenRouter (опционально). Прямой openrouter.ai с РФ часто 403.
 OPENROUTER_BASE = ""

@@ -19,10 +19,8 @@ except Exception:
     _GROQ = ""
 
 try:
-    from config_keys import OPENROUTER_API_KEY as _OR_KEY
     from config_keys import OPENROUTER_MODEL as _OR_MODEL
 except Exception:
-    _OR_KEY = ""
     _OR_MODEL = "openai/gpt-4.1-mini"
 
 try:
@@ -68,16 +66,7 @@ CAI_MAX_UPLOAD_BYTES = 18 * 1024 * 1024
 
 _MAX_DOC_CHARS = 60000
 _MAX_REPLY_CHARS = 3500
-def _openrouter_base() -> str:
-    try:
-        from config_keys import OPENROUTER_BASE as _b
-    except Exception:
-        _b = ""
-    b = (_b or "https://openrouter.ai/api/v1").strip().rstrip("/")
-    return b or "https://openrouter.ai/api/v1"
 
-
-OPENROUTER_URL = _openrouter_base() + "/chat/completions"
 OPENROUTER_DEFAULT_MODEL = "openai/gpt-4.1-mini"
 OPENROUTER_DEFAULT_DOC_MODEL = "google/gemini-2.5-flash"
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -210,34 +199,26 @@ def _chat_completion(
                 raise PaidAiRateLimited(limited)
     except ImportError:
         pass
-    or_key = (_OR_KEY or "").strip()
+    from llm_client import create_llm_client
+
+    client = create_llm_client()
     model = (model or _OR_MODEL or OPENROUTER_DEFAULT_MODEL).strip() or OPENROUTER_DEFAULT_MODEL
-    if or_key:
+    if client.api_key:
         last_exc: BaseException | None = None
         for attempt in range(3):
             try:
-                r = requests.post(
-                    OPENROUTER_URL,
-                    headers={
-                        "Authorization": f"Bearer {or_key}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://www.srogen.ru",
-                        "X-Title": "SRO GOLD Controller AI",
-                    },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "temperature": 0.1,
-                        "max_tokens": max_tokens,
-                        **({"plugins": plugins} if plugins else {}),
-                    },
+                return client.complete(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=0.1,
                     timeout=timeout,
+                    model=model,
+                    plugins=plugins,
+                    extra_headers={"X-Title": "SRO GOLD Controller AI"},
                 )
-                r.raise_for_status()
-                return r.json()["choices"][0]["message"]["content"].strip()
             except (requests.ConnectionError, requests.Timeout) as exc:
                 last_exc = exc
-                logging.warning("OpenRouter chat attempt %s failed: %s", attempt + 1, exc)
+                logging.warning("%s chat attempt %s failed: %s", client.provider, attempt + 1, exc)
                 if attempt < 2:
                     time.sleep(1.2 * (attempt + 1))
                     continue
@@ -287,14 +268,21 @@ def _audio_format(filename: str) -> str:
 
 
 def _transcribe_openrouter(data: bytes, filename: str) -> str:
-    or_key = (_OR_KEY or "").strip()
+    from llm_client import create_llm_client
+
+    client = create_llm_client()
+    # У DeepSeek нет /audio/transcriptions. Голос остаётся на локальном Whisper.
+    if client.provider != "openrouter":
+        raise RuntimeError("no_openrouter_key")
+    or_key = client.api_key
     if not or_key:
         raise RuntimeError("no_openrouter_key")
     fmt = _audio_format(filename)
     model = "openai/whisper-1"
     b64 = base64.b64encode(data).decode("ascii")
-    r = requests.post(
-        _openrouter_base() + "/audio/transcriptions",
+    sess = client.session()
+    r = sess.post(
+        client.base_url.rstrip("/") + "/audio/transcriptions",
         headers={
             "Authorization": f"Bearer {or_key}",
             "HTTP-Referer": "https://www.srogen.ru",
@@ -310,8 +298,8 @@ def _transcribe_openrouter(data: bytes, filename: str) -> str:
     )
     if r.status_code >= 400:
         files = {"file": (filename or "voice.ogg", data, "audio/ogg")}
-        r = requests.post(
-            _openrouter_base() + "/audio/transcriptions",
+        r = sess.post(
+            client.base_url.rstrip("/") + "/audio/transcriptions",
             headers={
                 "Authorization": f"Bearer {or_key}",
                 "HTTP-Referer": "https://www.srogen.ru",
@@ -373,17 +361,20 @@ def _transcribe_local(data: bytes, filename: str) -> str:
 
 
 def transcribe_voice(data: bytes, filename: str = "voice.ogg") -> str:
-    """STT: OpenRouter Whisper, при 403/сбое — локальный Whisper на сервере."""
+    """STT: OpenRouter Whisper (только LLM_PROVIDER=openrouter), иначе локальный Whisper."""
     if not data:
         raise RuntimeError("empty_audio")
 
-    # 1) Платный OpenRouter (если ключ жив и не режется политикой)
-    try:
-        text = _transcribe_openrouter(data, filename or "voice.ogg")
-        if text:
-            return text
-    except Exception as exc:
-        logging.warning("OpenRouter STT unavailable: %s", exc)
+    from llm_client import create_llm_client
+
+    # У DeepSeek нет распознавания речи — сразу локальный Whisper, без прокси.
+    if create_llm_client().provider == "openrouter":
+        try:
+            text = _transcribe_openrouter(data, filename or "voice.ogg")
+            if text:
+                return text
+        except Exception as exc:
+            logging.warning("OpenRouter STT unavailable: %s", exc)
 
     # 2) Локально на Москве (не зависит от блокировок OR)
     text = _transcribe_local(data, filename or "voice.ogg")
@@ -393,10 +384,16 @@ def transcribe_voice(data: bytes, filename: str = "voice.ogg") -> str:
 
 
 def extract_text_from_pdf_openrouter(data: bytes, filename: str = "document.pdf") -> str:
-    """Весь PDF разом: OpenRouter file-parser (mistral-ocr) + модель для документов."""
-    or_key = (_OR_KEY or "").strip()
-    if not or_key or not data:
+    """Весь PDF разом: OpenRouter file-parser (mistral-ocr) + модель для документов.
+
+    DeepSeek этот plugins/PDF-file не принимает — для него OCR идёт картинками страниц.
+    """
+    from llm_client import create_llm_client
+
+    client = create_llm_client()
+    if client.provider != "openrouter" or not client.api_key or not data:
         return ""
+    or_key = client.api_key
     if len(data) > 12 * 1024 * 1024:
         return ""
     b64 = base64.b64encode(data).decode("ascii")
@@ -430,8 +427,9 @@ def extract_text_from_pdf_openrouter(data: bytes, filename: str = "document.pdf"
         ],
     }
     try:
-        r = requests.post(
-            OPENROUTER_URL,
+        sess = client.session()
+        r = sess.post(
+            client.chat_url,
             headers={
                 "Authorization": f"Bearer {or_key}",
                 "Content-Type": "application/json",
@@ -974,7 +972,7 @@ def summarize_upload_for_controller(text: str, filename: str = "документ
             pass
         if isinstance(exc, RuntimeError):
             return (
-                "⚠️ Нет ключа ИИ (OPENROUTER_API_KEY или GROQ_API_KEY).\n"
+                "⚠️ Нет ключа ИИ (DEEPSEEK_API_KEY, OPENROUTER_API_KEY или GROQ_API_KEY).\n"
                 "Текст из файла получен, но разобрать его не удалось."
             )
         logging.warning("controller_ai summarize failed: %s", exc)
@@ -1041,9 +1039,10 @@ def answer_about_upload(question: str, chat_id: int) -> str:
 
 
 def extract_text_from_image(data: bytes, mime: str = "image/jpeg") -> str:
-    """OCR/выжимка с фото через OpenRouter vision (если есть ключ)."""
-    or_key = (_OR_KEY or "").strip()
-    if not or_key:
+    """OCR/выжимка с фото через vision (DeepSeek Flash или OpenRouter)."""
+    from llm_client import create_llm_client
+
+    if not create_llm_client().api_key:
         raise RuntimeError("no_openrouter_for_vision")
     if not data:
         return ""
@@ -1121,9 +1120,16 @@ def controller_free_chat(question: str) -> str:
         except ImportError:
             pass
         if isinstance(exc, RuntimeError):
+            from llm_client import create_llm_client, missing_key_name
+
+            if create_llm_client().provider == "openrouter":
+                return (
+                    "⚠️ Нет доступа к ИИ (OpenROUTER). "
+                    "Проверьте OPENROUTER_BASE/ключ или напишите вопрос иначе."
+                )
             return (
-                "⚠️ Нет доступа к ИИ (OpenROUTER). "
-                "Проверьте OPENROUTER_BASE/ключ или напишите вопрос иначе."
+                f"⚠️ Нет доступа к ИИ. Проверьте {missing_key_name()} "
+                "или напишите вопрос иначе."
             )
         logging.warning("controller_free_chat failed: %s", exc)
         return "⚠️ ИИ временно недоступен. Попробуйте ещё раз."

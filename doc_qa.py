@@ -19,16 +19,6 @@ except ImportError:
     _GROQ = ""
 
 try:
-    from config_keys import OPENROUTER_API_KEY as _OR_KEY
-except ImportError:
-    _OR_KEY = ""
-
-try:
-    from config_keys import OPENROUTER_MODEL as _OR_MODEL
-except ImportError:
-    _OR_MODEL = "openai/gpt-4.1-mini"
-
-try:
     from gigachat_client import chat_completion as _gigachat_chat
     from gigachat_client import credentials_configured as _gigachat_ok
 except ImportError:
@@ -38,17 +28,7 @@ except ImportError:
     def _gigachat_chat(*_a, **_k):
         raise RuntimeError("gigachat_unavailable")
 
-def _openrouter_base() -> str:
-    try:
-        from config_keys import OPENROUTER_BASE as _b
-    except Exception:
-        _b = ""
-    b = (_b or "https://openrouter.ai/api/v1").strip().rstrip("/")
-    return b or "https://openrouter.ai/api/v1"
-
-
-OPENROUTER_URL = _openrouter_base() + "/chat/completions"
-OPENROUTER_DEFAULT_MODEL = "openai/gpt-4.1-mini"
+from llm_client import create_llm_client, missing_key_name
 
 # Кнопка меню (пилот: вход только BOT_ADMIN_IDS в bot_FINAL_GOLD)
 DOC_QA_BUTTON = "📕 Документы"
@@ -799,28 +779,16 @@ def probe_document_hit(
 
 
 def _chat_completion(messages: list[dict], max_tokens: int = 900) -> str:
-    or_key = (_OR_KEY or "").strip()
-    model = (_OR_MODEL or OPENROUTER_DEFAULT_MODEL).strip() or OPENROUTER_DEFAULT_MODEL
-    if or_key:
+    client = create_llm_client()
+    if client.api_key:
         try:
-            r = requests.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {or_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://www.srogen.ru",
-                    "X-Title": "SRO GOLD DocQA",
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": 0.1,
-                    "max_tokens": max_tokens,
-                },
+            return client.complete(
+                messages,
+                max_tokens=max_tokens,
+                temperature=0.1,
                 timeout=60,
+                extra_headers={"X-Title": "SRO GOLD DocQA"},
             )
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"].strip()
         except Exception:
             pass
 
@@ -964,7 +932,7 @@ def answer_from_document(
             "ok": False,
             "text": (
                 "⚠️ Нет ключа ИИ.\n"
-                "Вставьте OPENROUTER_API_KEY, GIGACHAT_CREDENTIALS (Сбер) "
+                f"Вставьте {missing_key_name()} в .env, GIGACHAT_CREDENTIALS (Сбер) "
                 "или GROQ_API_KEY в config_keys.py."
             ),
         }
@@ -979,7 +947,10 @@ def answer_from_document(
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
-    if (_OR_KEY or "").strip():
+    client = create_llm_client()
+    if client.api_key and client.provider == "deepseek":
+        backend = "DeepSeek"
+    elif client.api_key:
         backend = "OpenRouter"
     elif _gigachat_ok():
         backend = "GigaChat"
