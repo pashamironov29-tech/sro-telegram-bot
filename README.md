@@ -4,6 +4,8 @@
 
 > **Секреты в репозиторий не входят.** Скопируйте `config_keys.example.py` → `config_keys.py` и заполните своими ключами (`BOT_TOKEN`, `MAX_BOT_TOKEN`).
 
+Правила для ассистентов (Cursor, DeepSeek): [AGENTS.md](AGENTS.md).
+
 ## Каналы
 
 | Канал | Запуск | Сервис на VPS |
