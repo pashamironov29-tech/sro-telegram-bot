@@ -1,4 +1,4 @@
-"""Лог «ответ не помог» по ответам ИИ → feedback_questions.jsonl."""
+"""Лог «ответ не помог» → feedback_questions.jsonl."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 FEEDBACK_FILE = ROOT / "feedback_questions.jsonl"
 
-# chat_id -> последний ответ ИИ (для кнопки / фразы)
+# chat_id -> последний ответ (для кнопки / фразы)
 _last_ai: dict[int, dict] = {}
 # chat_id -> ждём текст «что ожидали»
 _await_expected: set[int] = set()
@@ -53,7 +53,7 @@ def is_awaiting_expected(chat_id: int) -> bool:
 
 
 def begin_await_expected(chat_id: int) -> bool:
-    """True, если есть что логировать (был ответ ИИ)."""
+    """True, если есть что логировать (был ответ)."""
     if chat_id not in _last_ai:
         return False
     _await_expected.add(chat_id)

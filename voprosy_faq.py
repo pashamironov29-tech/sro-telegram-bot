@@ -498,7 +498,7 @@ _DEFAULT_SHORT = (
     "Ответ опубликован в официальном разделе «Вопрос-ответ» на сайте СРО."
 )
 
-# Связь тем ai_assistant → вопрос на voprosy (если фраза короткая, напр. «строительство для себя»)
+# Связь тем сайта → вопрос на voprosy (если фраза короткая, напр. «строительство для себя»)
 VOPROSY_TOPIC_LABELS = {
     "stroitelstvo_dlya_sebya": "Нужен ли допуск, если строите на своём объекте своими силами?",
     "vozvrat_vznosa": "Почему нельзя вернуть взнос в компфонд при выходе из СРО?",
@@ -823,7 +823,7 @@ def format_scope_mismatch_response(question: str, user_activity: str, blocked_it
 
 
 # для format_scope_mismatch — префикс кнопки (импорт ленивый в тексте)
-CTX_BUTTON_PREFIX = "🔄 ИИ — "
+CTX_BUTTON_PREFIX = "📄 СРО — "
 
 
 def format_voprosy_faq_response(question: str, item: dict, profile: dict | None = None) -> dict:

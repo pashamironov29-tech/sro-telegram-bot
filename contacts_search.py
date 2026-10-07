@@ -1,4 +1,4 @@
-"""Поиск сотрудников в телефонном справочнике (для ИИ-помощника и др.)."""
+"""Поиск сотрудников в телефонном справочнике."""
 
 from __future__ import annotations
 
@@ -262,7 +262,7 @@ def looks_like_directory_person_query(text: str) -> bool:
         letters = re.sub(r"[^а-яё]", "", words[0].lower())
         if len(letters) >= 4:
             try:
-                from ai_assistant import is_non_directory_site_query
+                from local_answers import is_non_directory_site_query
 
                 if is_non_directory_site_query(text):
                     return False
@@ -274,7 +274,7 @@ def looks_like_directory_person_query(text: str) -> bool:
     if any(lower.startswith(q) for q in question_starts):
         return False
     try:
-        from ai_assistant import is_non_directory_site_query
+        from local_answers import is_non_directory_site_query
 
         if is_non_directory_site_query(text):
             return False

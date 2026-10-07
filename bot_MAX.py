@@ -53,24 +53,17 @@ Path.resolve = _safe_resolve  # type: ignore[method-assign]
 
 from docx import Document
 
-from config_keys import GROQ_API_KEY, SRO_FILES_DIR
-from ai_assistant import (
-    AI_BUTTON,
-    AI_MODE_HINT,
-    enter_ai_mode,
-    enter_faq_mode,
+from config_keys import SRO_FILES_DIR
+from local_answers import (
+    NOT_FOUND_TEXT,
+    answer_question,
     enter_search_mode,
-    exit_ai_mode,
-    exit_faq_mode,
     exit_search_mode,
-    get_ai_response,
-    is_ai_mode,
     is_faq_mode,
-    is_search_mode,
+    looks_like_question,
 )
 from blanki_sro import BLANKI_MENU_ITEMS, blanki_file_path, blanki_source_label, resolve_blanki_sro_id
 from bot_disclaimers import FAQ_LINK_FOOTER, OFFICIAL_SOURCE_DISCLAIMER
-from sro_news import NEWS_BUTTON, format_news_message, is_news_button_text
 from faq_menu_content import DOCUMENTS_LIST_TEXT, FAQ_LINKS, FAQ_TEXTS
 from checko_client import (
     SECTIONS as CHECKO_SECTIONS,
@@ -80,54 +73,17 @@ from checko_client import (
 )
 from controller_access import (
     can_use_checko,
-    enter_controller_work_mode,
-    exit_controller_work_mode,
     is_controller,
     is_controller_work_mode,
 )
 from bot_core import (
-    CONTROLLER_AI_DENIED,
     active_input_mode,
-    gate_controller_ai_media,
-    gate_controller_ai_text,
-    prepare_ai_assistant,
-    prepare_controller_ai,
     prepare_controller_menu,
     prepare_faq,
     prepare_main_menu,
     prepare_nrs,
     prepare_search,
     prepare_welcome_reset,
-)
-from ai_rate_limit import ai_chat_scope
-from doc_qa import (
-    DOC_FALLBACK_NO,
-    DOC_FALLBACK_YES,
-    answer_from_document,
-    clear_doc_fallback_pending,
-    pop_doc_fallback_pending,
-)
-
-from controller_ai import (
-    CAI_AUDIO_EXTS,
-    CAI_FILE_EXTS,
-    CAI_IMAGE_EXTS,
-    CAI_MAX_UPLOAD_BYTES,
-    CONTROLLER_AI_BUTTON,
-    CONTROLLER_AI_HINT,
-    answer_about_upload,
-    controller_free_chat,
-    enter_controller_ai_mode,
-    exit_controller_ai_mode,
-    extract_text_from_bytes,
-    extract_text_from_image,
-    get_upload_context,
-    is_controller_ai_mode,
-    looks_like_doc_followup,
-    remember_upload,
-    safe_filename,
-    summarize_upload_for_controller,
-    transcribe_voice,
 )
 from nrs_search_links import (
     NRS_LINK_BUTTON,
@@ -151,7 +107,7 @@ from max_api import (
     sender_name,
     text_from_update,
 )
-from partners_data import get_partners_full_text
+from partners_data import get_partners_full_text, match_partner_query
 from reestr_sync import (
     enrich_reestr_entry,
     format_company_card,
@@ -236,7 +192,7 @@ HELP_TEXT = """ℹ️ <b>Справка — Помощник СРО</b>
 
 🔍 Поиск — ИНН или часть названия по 15 СРО
 ❓ Полезная информация — FAQ и бланки
-💬 ИИ-помощник — ориентир и ссылки на сайты СРО
+Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
 
 <i>Можно сразу ввести ИНН или название компании.</i>"""
 
@@ -271,11 +227,7 @@ def main_keyboard(user_id: int) -> list[dict]:
         return controller_keyboard(user_id)
     rows = [
         row(callback_button(SEARCH_ORG, "menu:search")),
-        row(
-            callback_button("❓ Полезная информация", "menu:info"),
-            callback_button(AI_BUTTON, "menu:ai"),
-        ),
-        row(callback_button(NEWS_BUTTON, "menu:news")),
+        row(callback_button("❓ Полезная информация", "menu:info")),
     ]
     if get_user_sro_id(user_id) or get_user_context(user_id):
         rows.append(row(callback_button(RESTART_ORG_BUTTON, "menu:restart")))
@@ -291,10 +243,7 @@ def controller_keyboard(user_id: int | None = None) -> list[dict]:
             callback_button(SEARCH_ORG, "menu:search"),
             callback_button(NRS_LINK_BUTTON, "menu:nrs"),
         ),
-        row(
-            callback_button("❓ Полезная информация", "menu:info"),
-            callback_button(CONTROLLER_AI_BUTTON, "menu:cai"),
-        ),
+        row(callback_button("❓ Полезная информация", "menu:info")),
     ]
     if user_id is not None and get_user_sro_id(user_id):
         rows.append(row(callback_button(RESTART_ORG_BUTTON, "menu:restart")))
@@ -308,8 +257,7 @@ def controller_menu_text() -> str:
         f"🔍 <b>{SEARCH_ORG}</b> — ИНН или название по всем 15 СРО\n"
         "   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
         f"👤 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ\n"
-        "❓ <b>Полезная информация</b> — бланки, документы для проверки\n"
-        f"🎙 <b>{CONTROLLER_AI_BUTTON}</b> — текст, голос, PDF/Word, фото документа\n\n"
+        "❓ <b>Полезная информация</b> — бланки, документы для проверки\n\n"
         "<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
         f"{OFFICIAL_SOURCE_DISCLAIMER}"
     )
@@ -353,7 +301,6 @@ def onboarding_keyboard(user_id: int | None = None) -> list[dict]:
     rows = [
         row(callback_button(SEARCH_ORG, "menu:search")),
         row(callback_button(SKIP_ONBOARDING_BUTTON, "menu:skip")),
-        row(callback_button(NEWS_BUTTON, "menu:news")),
     ]
     if user_id is not None and is_controller(user_id):
         rows.append(row(callback_button("👋 Меню контролёра", "menu:controller")))
@@ -369,7 +316,6 @@ def info_keyboard() -> list[dict]:
     return kb(
         row(callback_button("❓ Часто задаваемые вопросы", "faq:root")),
         row(callback_button("📋 Проверяемые документы", "info:docs")),
-        row(callback_button("💬 Спросить ИИ", "menu:ai")),
         back_main_row(),
     )
 
@@ -754,7 +700,7 @@ def context_ready_text(user_id: int) -> str:
     act = ACTIVITY_LABEL.get(prof["activity"], "")
     return (
         f"✅ Контекст: <b>{prof['short_title']}</b> ({act})\n\n"
-        "Вопросы ИИ и план проверок — <b>по вашему СРО</b>."
+        "План проверок и бланки — <b>по вашему СРО</b>."
     )
 
 
@@ -767,13 +713,12 @@ MAX_START_HINTS = frozenset({
 def welcome_text() -> str:
     return f"""👋 <b>Помощник СРО</b> — бот реестра и сервисов для членов <b>15 строительных СРО</b>.
 
-<b>Что умеет:</b> поиск организации по ИНН, план проверок, бланки, FAQ, ответы по документам. Контролёрам — /controller.
+<b>Что умеет:</b> поиск организации по ИНН, план проверок, бланки, FAQ. Контролёрам — /controller.
 
 <b>С чего начать</b> (кнопки <i>под этим сообщением</i>):
 • <b>ИНН</b> (10 или 12 цифр) — карточка в реестре
 • <b>{SEARCH_ORG}</b> — поиск по названию
 • <b>Пропустить</b> — если только вступаете в СРО
-• <b>Новости стройки</b> — НОСТРОЙ / НОПРИЗ / Минстрой
 • <b>Справка</b> — команды и подсказки
 
 Команды: /start · /help · /search · /info
@@ -808,13 +753,6 @@ def nrs_result_keyboard(query: str) -> list[dict]:
     rows = [row(link_button(label, url)) for label, url in nrs_registry_link_buttons(query)]
     rows.append(back_main_row())
     return kb(*rows)
-
-
-def open_controller_ai(user_id: int) -> None:
-    if not prepare_controller_ai(user_id):
-        send(user_id, CONTROLLER_AI_DENIED, main_keyboard(user_id))
-        return
-    send(user_id, CONTROLLER_AI_HINT, kb(back_main_row()))
 
 
 def present_found_organization(user_id: int, inn: str) -> str | None:
@@ -864,11 +802,6 @@ def open_search(user_id: int) -> None:
         f"(минимум {NAME_SEARCH_MIN_LEN} символа) по <b>всем 15 СРО</b>.",
         kb(back_main_row()),
     )
-
-
-def open_ai(user_id: int) -> None:
-    prepare_ai_assistant(user_id)
-    send(user_id, AI_MODE_HINT, kb(back_main_row()))
 
 
 def handle_universal_search(user_id: int, user_text: str) -> None:
@@ -1032,24 +965,15 @@ def handle_checko(user_id: int, payload: str) -> None:
 
 def handle_callback(user_id: int, payload: str, update: dict) -> None:
     answer_cb(update)
-    if payload in (DOC_FALLBACK_YES, DOC_FALLBACK_NO):
-        handle_doc_fallback_max(user_id, payload)
-        return
     if payload == "menu:main":
         open_main(user_id)
         return
     if payload == "menu:search":
         open_search(user_id)
         return
-    if payload in ("info:news", "menu:news"):
-        send(user_id, format_news_message(limit=5))
-        return
     if payload == "menu:info":
         prepare_faq(user_id)
         send(user_id, "📁 <b>Полезная информация</b>\n\nВыберите раздел:", info_keyboard())
-        return
-    if payload == "menu:ai":
-        open_ai(user_id)
         return
     if payload == "menu:help":
         send(user_id, HELP_TEXT, main_keyboard(user_id))
@@ -1067,9 +991,6 @@ def handle_callback(user_id: int, payload: str, update: dict) -> None:
         return
     if payload == "menu:nrs":
         open_nrs(user_id)
-        return
-    if payload == "menu:cai":
-        open_controller_ai(user_id)
         return
     if payload == "menu:restart":
         clear_user_sro(user_id)
@@ -1157,254 +1078,10 @@ def handle_callback(user_id: int, payload: str, update: dict) -> None:
 
 
 
-def _cai_kb() -> list[dict]:
-    return kb(back_main_row())
-
-
-def _seems_about_last_doc(q: str) -> bool:
-    ql = (q or "").lower()
-    return any(
-        w in ql
-        for w in (
-            "этот",
-            "этого",
-            "здесь",
-            "выше",
-            "прислал",
-            "загрузил",
-            "файл",
-            "документ",
-            "фото",
-            "скан",
-        )
-    )
-
-
-def _send_controller_ai_text(user_id: int, question: str) -> None:
-    q = (question or "").strip()
-    if not q:
-        send(user_id, "Пустой запрос — надиктуйте или напишите ещё раз.", _cai_kb())
-        return
-    with ai_chat_scope(user_id):
-        doc_text, _name = get_upload_context(user_id)
-        if doc_text and (looks_like_doc_followup(q) or _seems_about_last_doc(q)):
-            reply = answer_about_upload(q, user_id)
-        else:
-            reply = controller_free_chat(q)
-    send(user_id, reply, _cai_kb())
-
-
-def _att_payload(att: dict) -> dict:
-    payload = att.get("payload")
-    return payload if isinstance(payload, dict) else {}
-
-
-def _att_url(att: dict) -> str:
-    p = _att_payload(att)
-    return (p.get("url") or att.get("url") or "").strip()
-
-
-def _att_filename(att: dict, default: str) -> str:
-    p = _att_payload(att)
-    raw = p.get("filename") or p.get("file_name") or p.get("name") or att.get("filename") or default
-    return safe_filename(str(raw))
-
-
-def _download_att(att: dict) -> bytes:
-    assert api is not None
-    url = _att_url(att)
-    if not url:
-        p = _att_payload(att)
-        logging.warning("MAX attachment without url: type=%s payload_keys=%s", att.get("type"), list(p))
-        raise MaxApiError("У вложения нет url")
-    return api.download_bytes(url, max_bytes=CAI_MAX_UPLOAD_BYTES)
-
-
-def doc_fallback_keyboard() -> list[dict]:
-    return kb(
-        row(
-            callback_button("✅ Да, короткий ответ", DOC_FALLBACK_YES),
-            callback_button("✖️ Нет", DOC_FALLBACK_NO),
-        ),
-        back_main_row(),
-    )
-
-
-def _send_ai_reply_max(user_id: int, user_text: str) -> None:
-    result = get_ai_response(user_text, GROQ_API_KEY, chat_id=user_id)
-    answer = result.get("text") or "Не удалось получить ответ. Попробуйте ещё раз."
-    if result.get("doc_fallback"):
-        send(user_id, answer, doc_fallback_keyboard())
-    else:
-        clear_doc_fallback_pending(user_id)
-        send(user_id, answer, kb(back_main_row()))
-
-
-def handle_doc_fallback_max(user_id: int, payload: str) -> None:
-    if payload == DOC_FALLBACK_NO:
-        clear_doc_fallback_pending(user_id)
-        send(
-            user_id,
-            "Хорошо. Можно уточнить вопрос или открыть сайт: https://www.srogen.ru/",
-            kb(back_main_row()),
-        )
-        return
-    question = pop_doc_fallback_pending(user_id)
-    if not question:
-        send(
-            user_id,
-            "Задайте вопрос ещё раз — предложение по документу уже неактуально.",
-            kb(back_main_row()),
-        )
-        return
-    send(user_id, "⏳ Готовлю короткий ответ по документу…", kb(back_main_row()))
-    result = answer_from_document(
-        question, sro_id=get_user_sro_id(user_id), chat_id=user_id
-    )
-    send(
-        user_id,
-        result.get("text") or "⚠️ Пустой ответ.",
-        kb(back_main_row()),
-    )
-
-
-def _handle_cai_audio(user_id: int, att: dict) -> None:
-    send(user_id, "🎧 Распознаю голос…", _cai_kb())
-    data = _download_att(att)
-    fname = _att_filename(att, "voice.ogg")
-    text = transcribe_voice(data, fname)
-    if not text:
-        send(
-            user_id,
-            "Не разобрал речь. Повторите голосовое громче/чётче или напишите текстом.",
-            _cai_kb(),
-        )
-        return
-    send(user_id, f"🗣 <b>Распознано:</b>\n{html_esc(text)}")
-    _send_controller_ai_text(user_id, text)
-
-
-def _handle_cai_image(user_id: int, att: dict) -> None:
-    send(user_id, "🖼 Смотрю фото документа…", _cai_kb())
-    data = _download_att(att)
-    fname = _att_filename(att, "photo.jpg")
-    mime = "image/png" if fname.lower().endswith(".png") else "image/jpeg"
-    with ai_chat_scope(user_id):
-        raw = extract_text_from_image(data, mime=mime)
-        remember_upload(user_id, raw, "фото документа")
-        summary = summarize_upload_for_controller(raw, "фото документа")
-    send(user_id, f"🖼 <b>фото документа</b>\n\n{summary}", _cai_kb())
-
-
-def handle_controller_ai_attachments(user_id: int, update: dict) -> bool:
-    """True — вложения обработаны (или дан отказ)."""
-    atts = [a for a in attachments_from_update(update) if isinstance(a, dict)]
-    media = [
-        a
-        for a in atts
-        if (a.get("type") or "").lower() in ("file", "audio", "image", "voice")
-    ]
-    if not media:
-        return False
-    _media = gate_controller_ai_media(user_id)
-    if _media == "deny" or _media == "skip":
-        return False
-    if _media == "need_mode":
-        send(
-            user_id,
-            "Сначала откройте <b>🎙 ИИ-помощник</b>, затем пришлите голос, файл или фото.",
-            controller_keyboard(user_id),
-        )
-        return True
-
-    caption = text_from_update(update)
-    handled = False
-    for att in media:
-        kind = (att.get("type") or "").lower()
-        fname = _att_filename(att, "document")
-        lower = fname.lower()
-        try:
-            if kind in ("audio", "voice") or any(lower.endswith(ext) for ext in CAI_AUDIO_EXTS):
-                _handle_cai_audio(user_id, att)
-                handled = True
-                continue
-
-            if kind == "image" or any(lower.endswith(ext) for ext in CAI_IMAGE_EXTS):
-                _handle_cai_image(user_id, att)
-                handled = True
-                continue
-
-            if not any(lower.endswith(ext) for ext in CAI_FILE_EXTS):
-                send(
-                    user_id,
-                    "Пока принимаю PDF, Word (.doc и .docx), TXT и Excel (.xlsx).\n"
-                    "Можно также прислать <b>фото</b> документа.",
-                    _cai_kb(),
-                )
-                handled = True
-                continue
-            send(user_id, f"📄 Читаю «{html_esc(fname)}»…", _cai_kb())
-            try:
-                data = _download_att(att)
-            except MaxApiError as exc:
-                if getattr(exc, "status", None) == 413 or "больш" in str(exc).lower():
-                    send(
-                        user_id,
-                        "Файл слишком большой (лимит ~18 МБ). Пришлите короче или фото ключевых страниц.",
-                        _cai_kb(),
-                    )
-                    handled = True
-                    continue
-                raise
-            with ai_chat_scope(user_id):
-                raw = extract_text_from_bytes(data, fname)
-            if not (raw or "").strip():
-                send(
-                    user_id,
-                    "⚠️ Не удалось прочитать файл (нет текста и OCR не сработал).\n"
-                    "Пришлите фото страниц крупнее или Word/PDF с текстовым слоем.",
-                    _cai_kb(),
-                )
-                handled = True
-                continue
-            remember_upload(user_id, raw, fname)
-            with ai_chat_scope(user_id):
-                summary = summarize_upload_for_controller(raw, fname)
-            send(user_id, f"📄 <b>{html_esc(fname)}</b>\n\n{summary}", _cai_kb())
-            handled = True
-        except MaxApiError as exc:
-            if getattr(exc, "status", None) == 413 or "больш" in str(exc).lower():
-                send(
-                    user_id,
-                    "Файл слишком большой (лимит ~18 МБ). Пришлите короче или фото ключевых страниц.",
-                    _cai_kb(),
-                )
-            else:
-                logging.exception("controller AI attachment download failed")
-                send(user_id, "⚠️ Не удалось скачать вложение. Попробуйте ещё раз.", _cai_kb())
-            return True
-        except RuntimeError as exc:
-            msg = str(exc).lower()
-            if "openrouter" in msg or "vision" in msg or "no_openrouter" in msg:
-                send(
-                    user_id,
-                    "⚠️ Нужен ключ ИИ (DEEPSEEK_API_KEY или OPENROUTER_API_KEY) — распознавание фото недоступно.\n"
-                    "Напишите текстом или пришлите PDF/Word.",
-                    _cai_kb(),
-                )
-            else:
-                logging.exception("controller AI attachment failed")
-                send(user_id, "⚠️ Не удалось разобрать вложение. Попробуйте ещё раз.", _cai_kb())
-            return True
-        except Exception:
-            logging.exception("controller AI attachment failed")
-            send(user_id, "⚠️ Ошибка разбора файла. Пришлите PDF/Word или напишите текстом.", _cai_kb())
-            return True
-
-    if handled and caption and len(caption) >= 3:
-        _send_controller_ai_text(user_id, caption)
-        return True
-    return handled
+def send_question_reply(user_id: int, user_text: str) -> None:
+    result = answer_question(user_text, chat_id=user_id)
+    answer = result.get("text") or NOT_FOUND_TEXT
+    send(user_id, answer, main_keyboard(user_id))
 
 
 def handle_text(user_id: int, user_text: str, update: dict) -> None:
@@ -1442,17 +1119,10 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
         return
 
     mode = active_input_mode(user_id)
-    if mode == "controller_ai":
-        if gate_controller_ai_text(user_id) == "pass":
-            _send_controller_ai_text(user_id, user_text)
-            return
-    elif mode == "search":
+    if mode == "search":
         handle_universal_search(user_id, user_text)
         return
-    elif mode == "ai":
-        _send_ai_reply_max(user_id, user_text)
-        return
-    elif mode == "nrs":
+    if mode == "nrs":
         send(
             user_id,
             format_nrs_link_reply(user_text, chat_id=user_id),
@@ -1492,6 +1162,10 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
             send_org_not_found(user_id, user_text)
             return
 
+    if looks_like_question(user_text) or match_partner_query(user_text):
+        send_question_reply(user_id, user_text)
+        return
+
     if len(user_text.strip()) >= NAME_SEARCH_MIN_LEN and not user_text.startswith("/"):
         handle_universal_search(user_id, user_text)
         return
@@ -1517,10 +1191,7 @@ def dispatch(update: dict) -> None:
         return
     if utype == "message_created":
         uid = int(user_id)
-        media_done = handle_controller_ai_attachments(uid, update)
         text = text_from_update(update)
-        if media_done:
-            return
         if text:
             handle_text(uid, text, update)
         return
@@ -1586,8 +1257,7 @@ def main() -> None:
     print(f"🚀 MAX-бот polling... пользователей в журнале: {users_count()}", flush=True)
     print("Telegram-бота этот процесс не запускает.", flush=True)
 
-    # Лёгкие апдейты (текст/кнопки) и тяжёлые (вложения: STT/OCR/файлы) — разные пулы,
-    # чтобы один голос/PDF не занял все 4 воркера.
+    # Текст и вложения не блокируют друг друга.
     light_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="max-light")
     heavy_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="max-heavy")
 

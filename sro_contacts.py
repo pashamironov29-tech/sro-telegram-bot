@@ -203,7 +203,7 @@ def _alias_in_text(alias: str, normalized: str) -> bool:
 def match_sro_contact_query(text: str) -> str | None:
     """
     Если запрос про контакты конкретного СРО — вернуть sro_id.
-    Иначе None (пусть обрабатывают партнёры / ИИ).
+    Иначе None (дальше смотрят партнёры и темы по словам).
     """
     normalized = _normalize(text)
     if not normalized or not _has_contact_intent(normalized):
