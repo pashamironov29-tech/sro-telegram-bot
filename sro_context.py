@@ -1,4 +1,4 @@
-"""Контекст СРО пользователя (пилот): привязка к ИНН и типу деятельности для ИИ/FAQ."""
+"""Контекст СРО пользователя (пилот): привязка к ИНН и типу деятельности для FAQ."""
 
 from __future__ import annotations
 
@@ -249,7 +249,7 @@ def joiner_activity_hint() -> str:
         "• <b>Проектировщики</b> — СРО НОПРИЗ (проектирование)\n"
         "• <b>Изыскания</b> — СРО НОПРИЗ (изыскания)\n\n"
         "Дальше выберете <b>конкретное СРО</b> — от этого зависят "
-        "ответы ИИ, план проверок и бланки.\n\n"
+        "план проверок и бланки.\n\n"
         "<i>Когда станете членом — снова /start и введите ИНН: "
         "подставится ваше СРО автоматически.</i>"
     )
@@ -259,7 +259,7 @@ def joiner_sro_pick_hint(activity: str | None) -> str:
     act = ACTIVITY_LABEL.get(activity or "", activity or "СРО")
     return (
         f"📄 <b>Шаг 2. Выберите своё СРО</b> ({act})\n\n"
-        "От выбора зависят ответы ИИ, ссылки, план проверок и бланки.\n"
+        "От выбора зависят ссылки, план проверок и бланки.\n"
         "Строителей, проектировщиков и изыскателей не смешиваем.\n\n"
         f"<i>Кнопка «{BACK_TO_DIRECTION_BUTTON}» — сменить направление. "
         f"«{RESTART_ORG_BUTTON}» — снова ИНН или без ИНН. "
@@ -448,7 +448,7 @@ def multi_sro_picker_hint(sro_ids: list[str]) -> str:
         "📄 <b>Организация в нескольких СРО</b>\n\n"
         f"{listing}\n\n"
         "Выберите <b>своё СРО</b> кнопкой ниже — от этого зависят "
-        "ответы ИИ, план проверок и бланки.\n"
+        "план проверок и бланки.\n"
         "Строителей и проектировщиков не смешиваем.\n\n"
         "<i>После выбора откроется главное меню "
         f"(«{BACK_TO_SRO_PICK_BUTTON}» — сменить СРО этой организации; "
@@ -477,14 +477,14 @@ def apply_context_from_memberships(chat_id: int, inn: str, membership_ids: list[
         ):
             set_user_sro(chat_id, current_sro, inn=inn)
             line = format_activity_line(get_sro_profile(current_sro))
-            return f"\n\n🤖 <i>Контекст ИИ и бланки: {line}</i>"
+            return f"\n\n<i>Контекст СРО и бланки: {line}</i>"
 
         _pending_sro_pick[chat_id] = list(membership_ids)
         _user_context[chat_id] = {"sro_id": None, "inn": inn}
         return (
             "\n\n⚠️ <b>Организация состоит в нескольких СРО.</b>\n"
             "Сначала выберите <b>своё СРО</b> кнопкой ниже — от этого зависят "
-            "бланки, план проверок и ответы ИИ."
+            "бланки и план проверок."
         )
 
     _pending_sro_pick.pop(chat_id, None)
@@ -494,7 +494,7 @@ def apply_context_from_memberships(chat_id: int, inn: str, membership_ids: list[
         if get_sro_profile(fallback):
             set_user_sro(chat_id, fallback, inn=inn)
             line = format_activity_line(get_sro_profile(fallback))
-            return f"\n\n🤖 <i>Контекст ИИ и бланки: {line}</i>"
+            return f"\n\n<i>Контекст СРО и бланки: {line}</i>"
     return ""
 
 
@@ -504,13 +504,3 @@ def context_picker_hint(chat_id: int) -> str | None:
         return None
     return multi_sro_picker_hint(ids)
 
-
-def ai_context_banner(chat_id: int) -> str:
-    profile = get_user_profile(chat_id)
-    if not profile:
-        return (
-            "\n\n<i>Контекст СРО не задан. Введите <b>ИНН</b> организации — "
-            "бот подставит ваше СРО. Пока ответы как для Ассоциации «ГЕН».</i>"
-        )
-    act = ACTIVITY_LABEL.get(profile["activity"], "")
-    return f"\n\n<i>Контекст: {profile['short_title']} ({act})</i>"

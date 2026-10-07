@@ -99,4 +99,4 @@
 - Члены: `BRIF_DRUGOMU_II_IDEI_BOTA.md`  
 - Контролёры (общий): `BRIF_DRUGOMU_II_KONTROLERY.md`  
 - Этот файл: `GOLD\docs\KONTROLERY_GRAFIKI_EXCEL.md` + копия мысли на Desktop при необходимости  
-- Отчёт трёх ИИ: `OTCHET_TRI_II_IDEI_BOTA.md`
+- Сводный отчёт идей: `OTCHET_TRI_II_IDEI_BOTA.md`

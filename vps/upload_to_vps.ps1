@@ -29,21 +29,18 @@ $RuntimeFiles = @(
     "bot_MAX.py",
     "max_api.py",
     "faq_menu_content.py",
-    "sro_news.py",
-    "ai_assistant.py",
+    "local_answers.py",
     "reestr_sync.py",
     "voprosy_faq.py",
     "sro_site_qa.py",
     "partners_data.py",
     "contacts_data.py",
-    "contacts_access.py",
     "contacts_search.py",
     "sro_context.py",
     "sro_profiles.py",
     "blanki_sro.py",
     "info_list_fill.py",
     "info_list_quiz.py",
-    "doc_checklist.py",
     "trusted_members.py",
     "sro_about.py",
     "sro_fees.py",
@@ -55,9 +52,6 @@ $RuntimeFiles = @(
     "bot_core.py",
     "checko_client.py",
     "nrs_search_links.py",
-    "doc_qa.py",
-    "ai_rate_limit.py",
-    "controller_ai.py",
     "prevent_sleep.py",
     "requirements.txt"
 )
@@ -71,17 +65,10 @@ foreach ($f in $RuntimeFiles) {
 }
 $RuntimeFiles = @($RuntimeFiles | Where-Object { Test-Path $_ })
 
-# Жёсткий стоп: не залить bot без ИИ-помощника контролёра (голос/доки)
-
 Write-Host "Checking prod SRO gate (15 SRO, unique sites)..." -ForegroundColor Cyan
 & py -u (Join-Path $PSScriptRoot "check_prod_sro_gate.py")
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Abort upload: prod SRO gate FAILED (урезанный/неверный набор СРО)"
-}
-Write-Host "Checking controller AI wiring..." -ForegroundColor Cyan
-& py -u (Join-Path $PSScriptRoot "check_controller_ai_wired.py") (Join-Path $ProjectRoot "bot_FINAL_GOLD.py")
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Abort upload: controller AI (voice/docs) is NOT wired in bot_FINAL_GOLD.py"
 }
 
 

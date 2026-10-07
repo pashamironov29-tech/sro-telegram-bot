@@ -13,20 +13,20 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from ai_assistant import local_ai_route_kind, match_topic_local, should_route_to_ai
+from local_answers import local_route_kind, looks_like_question, match_topic_local
 from contacts_search import looks_like_directory_person_query, should_global_directory_intercept
 from partners_data import match_partner_query
 from sro_site_qa import match_sro_site_qa
 from voprosy_faq import match_voprosy_faq
 
 
-def _ai_path(text: str) -> bool:
-    """Должен уйти в ИИ/сайт/FAQ, а не в справочник и не в ложного партнёра."""
+def _question_path(text: str) -> bool:
+    """Должен уйти в сайт/FAQ, а не в справочник и не в ложного партнёра."""
     if looks_like_directory_person_query(text):
         return False
     if match_partner_query(text):
         return False
-    if should_route_to_ai(text):
+    if looks_like_question(text):
         return True
     if match_sro_site_qa(text) or match_voprosy_faq(text):
         return True
@@ -36,7 +36,7 @@ def _ai_path(text: str) -> bool:
 
 
 def _directory_path(text: str) -> bool:
-    return should_global_directory_intercept(text) and not should_route_to_ai(text)
+    return should_global_directory_intercept(text) and not looks_like_question(text)
 
 
 def _not_global_directory(text: str) -> bool:
@@ -49,15 +49,15 @@ CASES = [
     ("телефон Миронова", "directory", _directory_path),
     ("Берестовская", "directory", _directory_path),
     ("Малинина Ольга Николаевна", "not_global_dir", _not_global_directory),
-    # сайт / ИИ
-    ("где устав", "ai", _ai_path),
-    ("устав", "ai", _ai_path),
-    ("комфонд", "ai", _ai_path),
-    ("стандарты и правила СРО", "ai", _ai_path),
-    ("база законов", "ai", _ai_path),
-    ("техрегулирование", "ai", _ai_path),
-    ("размеры взносов", "ai", _ai_path),
-    ("еврокоды что это", "ai", _ai_path),
+    # сайт / вопрос
+    ("где устав", "question", _question_path),
+    ("устав", "question", _question_path),
+    ("комфонд", "question", _question_path),
+    ("стандарты и правила СРО", "question", _question_path),
+    ("база законов", "question", _question_path),
+    ("техрегулирование", "question", _question_path),
+    ("размеры взносов", "question", _question_path),
+    ("еврокоды что это", "question", _question_path),
     # партнёры — только явные запросы
     ("размеры взносов", "no_partner", lambda t: match_partner_query(t) is None),
     ("носо", "partner", lambda t: match_partner_query(t) is not None),
@@ -111,7 +111,7 @@ def main() -> int:
 
     for text in SCREENSHOT_ROUTES:
         try:
-            route = local_ai_route_kind(text)
+            route = local_route_kind(text)
             ok = route == "voprosy"
         except Exception as exc:
             ok = False

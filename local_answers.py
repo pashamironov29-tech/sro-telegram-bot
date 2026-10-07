@@ -1,23 +1,11 @@
-"""ИИ-помощник СРО: DeepSeek или OpenRouter → GigaChat (РФ) → Groq подбирает раздел srogen.ru."""
+# -*- coding: utf-8 -*-
+"""Локальные ответы без нейросети: партнёры, темы по словам, вопрос-ответ, сайт."""
 
 import re
 from difflib import SequenceMatcher
 
-import requests
-
-from llm_client import create_llm_client, missing_key_name
-
-try:
-    from gigachat_client import chat_completion as _gigachat_chat
-    from gigachat_client import credentials_configured as _gigachat_ok
-except ImportError:
-    def _gigachat_ok():
-        return False
-
-    def _gigachat_chat(*_a, **_k):
-        raise RuntimeError("gigachat_unavailable")
-
-from partners_data import format_partner_response, get_partners_full_text, match_partner_query
+from bot_disclaimers import OFFICIAL_SOURCE_DISCLAIMER, html_esc
+from partners_data import format_partner_response, match_partner_query
 from sro_site_qa import format_sro_site_qa_response, match_sro_site_qa
 from voprosy_faq import (
     check_activity_question_conflict,
@@ -335,7 +323,7 @@ SITE_TOPICS = {
     },
 }
 
-# Быстрый поиск по ключевым словам — надёжнее, чем только ИИ
+# Быстрый поиск по ключевым словам.
 KEYWORD_RULES = [
     ("o_sro", [
         "что такое сро", "что такое саморегулир", "что такое саморегулируемая",
@@ -507,61 +495,8 @@ KEYWORD_RULES = [
     ]),
 ]
 
-AI_BUTTON = "💬 ИИ-помощник"
-FAQ_AI_BUTTON = "💬 Не нашли в FAQ? Спросите ИИ"
-
-from bot_disclaimers import OFFICIAL_SOURCE_DISCLAIMER, html_esc
-
-AI_MODE_HINT = (
-    "🤖 <b>ИИ-помощник СРО Ассоциации</b>\n\n"
-    "Задайте вопрос своими словами — я подберу <b>конкретный раздел</b> на официальном сайте "
-    "и дам краткий ориентир.\n\n"
-    "<i>Примеры: «Размеры взносов», «Нострой реестр специалистов», «План проверок»</i>\n"
-    "<i>Организацию ищите кнопкой «🔍 Поиск организации» — ИНН или часть названия "
-    "(например «7736…» или «ТаКПО»).</i>\n\n"
-    f"{OFFICIAL_SOURCE_DISCLAIMER}\n\n"
-    "Чтобы выйти — нажмите «⬅️ Назад в меню»."
-)
-FAQ_AI_HINT = (
-    "🤖 <b>Не нашли ответ в FAQ?</b>\n\n"
-    "Задайте вопрос своими словами — ИИ-помощник подберёт нужный раздел на официальном сайте "
-    "и даст краткий ориентир.\n\n"
-    "<b>Примеры вопросов:</b>\n"
-    "• Размеры взносов\n"
-    "• Нострой реестр специалистов\n"
-    "• План проверок\n"
-    "• Документы для вступления\n\n"
-    f"{OFFICIAL_SOURCE_DISCLAIMER}\n\n"
-    "Чтобы выйти — нажмите «⬅️ Назад в меню»."
-)
-FAQ_NOT_FOUND_TEXT = (
-    "🤔 <b>Не нашли нужный ответ в FAQ?</b>\n\n"
-    "Возможно, информация есть на официальном сайте в другом разделе.\n\n"
-    "Нажмите кнопку <b>💬 Не нашли в FAQ? Спросите ИИ</b> ниже "
-    "или задайте вопрос прямо сейчас — ИИ-помощник подберёт ссылку.\n\n"
-    "<b>Примеры:</b>\n"
-    "• Размеры взносов\n"
-    "• Нострой реестр специалистов\n"
-    "• Получение выписки\n\n"
-    f"{OFFICIAL_SOURCE_DISCLAIMER}"
-)
-
-ai_mode_users = set()
 faq_mode_users = set()
 search_mode_users = set()
-
-
-def is_ai_mode(chat_id):
-    return chat_id in ai_mode_users
-
-
-def enter_ai_mode(chat_id):
-    search_mode_users.discard(chat_id)
-    ai_mode_users.add(chat_id)
-
-
-def exit_ai_mode(chat_id):
-    ai_mode_users.discard(chat_id)
 
 
 def is_faq_mode(chat_id):
@@ -582,7 +517,6 @@ def is_search_mode(chat_id):
 
 
 def enter_search_mode(chat_id):
-    ai_mode_users.discard(chat_id)
     faq_mode_users.discard(chat_id)
     search_mode_users.add(chat_id)
 
@@ -808,8 +742,8 @@ def _fuzzy_match_topic(question, min_ratio=0.78, *, skip_directory_check=False):
     return None, None
 
 
-def should_route_to_ai(question):
-    """Определяет, что текст — вопрос для ИИ, а не поиск организации."""
+def looks_like_question(question):
+    """Текст похож на вопрос, а не на поиск организации по названию."""
     if _match_by_keywords(question):
         return True
     if _fuzzy_match_topic(question)[0]:
@@ -830,15 +764,6 @@ def should_route_to_ai(question):
         "где взять", "где найти", "где посмотреть", "где узнать",
     )
     return normalized.startswith(question_starts)
-
-
-def _build_topics_prompt():
-    lines = []
-    for topic_id, topic in SITE_TOPICS.items():
-        lines.append(
-            f"{topic_id}: {topic['title']} — {topic['description']} — URL: {topic['url']}"
-        )
-    return "\n".join(lines)
 
 
 def _match_blanki_topic(normalized):
@@ -1292,233 +1217,19 @@ def _format_topic_response(
     }
 
 
-def _topic_router_prompt(question):
-    return f"""Ты помощник СРО Ассоциации «Объединение генеральных подрядчиков в строительстве» (сайт srogen.ru).
-Это НЕ Minecraft и НЕ другой бот — только СРО / строительство / членство.
-
-Пользователь задал вопрос. Выбери ОДИН наиболее подходящий раздел сайта из списка.
-Не придумывай факты. Не отвечай на вопрос — только выбери ID раздела.
-
-Примеры:
-- "где планы проверок" -> plan_proverok
-- "результаты проверок" -> resultaty_proverok
-- "подготовка к НОК" -> nok_obuchenie
-- "размеры взносов" -> vznosy
-- "возврат взноса" -> vozvrat_vznosa
-- "сроки рассмотрения заявки" -> sroki_vstuplenie
-- "строительство для себя" -> stroitelstvo_dlya_sebya
-- "документы в НРС" -> dokumenty_nrs
-- "вступить в нрс" -> vnesenie_v_reestr_spec
-- "вступить в нрм" -> vnesenie_v_reestr_spec
-- "требования к специалистам" -> trebovaniya_spec
-- "реестр НОСТРОЙ" -> nostroy_reestr
-- "реестр специалистов НОСТРОЙ" -> nostroy_nrs
-- "нострой реестр специалистов" -> nostroy_nrs
-- "просто нострой" -> nostroy_reestr
-- "реестр НРС" -> nostroy_nrs
-- "реестр НОПРИЗ" -> nopriz_nrs
-- "ноприз" -> nopriz_nrs
-- "информация про НОК" -> nok
-- "какие документы для нок" -> nok
-- "какие документы для вступления" -> vstuplenie
-- "какие документы для проверки" -> perechen_dokumentov
-- "что такое СРО" -> o_sro
-- "зачем нужно СРО" -> o_sro
-- "что такое одо" -> blanki_odo
-- "уведомление одо" -> blanki_odo
-- "выписка из СРО" -> poluchenie_vypiski
-- "личный кабинет" -> lichniy_kabinet
-- "бланки для проверки" -> blanki_proverka
-- "бланки для вступления" -> blanki_vstuplenie
-- "бланк ОДО" -> blanki_odo
-- "бланк изменений" -> blanki_reestr
-- "просто бланки" -> blanki_menu
-- "жалоба" -> zhaloby
-- "филиал" -> filialy
-
-Важно: nostroy_nrs — реестр СПЕЦИАЛИСТОВ (nrs.nostroy.ru). nostroy_reestr — реестр ОРГАНИЗАЦИЙ/СРО (reestr.nostroy.ru).
-
-Разделы:
-{_build_topics_prompt()}
-
-Если вопрос не про СРО, строительство, членство, специалистов или деятельность ассоциации — ответь: NONE
-
-Вопрос: {question}
-
-Ответь СТРОГО одним словом: ID раздела (например plan_proverok) или NONE."""
-
-
-def _parse_topic_id(answer):
-    topic_id = (answer or "").strip().lower().split()[0]
-    return topic_id.strip(".,:;\"'")
-
-
-def _ask_primary_topic(question):
-    prompt = _topic_router_prompt(question)
-    answer = create_llm_client().complete(
-        [{"role": "user", "content": prompt}],
-        max_tokens=32,
-        temperature=0,
-        timeout=45,
-        extra_headers={"X-Title": "SRO GOLD Bot"},
-    )
-    return _parse_topic_id(answer)
-
-
-def _ask_groq(question, api_key):
-    prompt = _topic_router_prompt(question)
-    response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key.strip()}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "llama-3.1-8b-instant",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    answer = response.json()["choices"][0]["message"]["content"]
-    return _parse_topic_id(answer)
-
-
-def _ask_gigachat_topic(question):
-    prompt = _topic_router_prompt(question)
-    answer = _gigachat_chat(
-        [{"role": "user", "content": prompt}],
-        max_tokens=32,
-        temperature=0.0,
-    )
-    return _parse_topic_id(answer)
-
-
-def _ask_topic_id(question, groq_api_key):
-    """DeepSeek или OpenRouter → GigaChat (РФ) → Groq. Ошибки верхнего → следующий."""
-    client = create_llm_client()
-    if client.api_key:
-        try:
-            return _ask_primary_topic(question), client.provider
-        except Exception:
-            pass
-    if _gigachat_ok():
-        try:
-            return _ask_gigachat_topic(question), "gigachat"
-        except Exception:
-            pass
-    if groq_api_key and groq_api_key.strip():
-        return _ask_groq(question, groq_api_key), "groq"
-    return None, None
-
-
 def match_topic_local(question):
-    """Быстрый локальный подбор раздела (ключевые слова и опечатки), без LLM."""
+    """Быстрый подбор раздела по ключевым словам и опечаткам."""
     topic_id = _match_by_keywords(question)
     if topic_id:
         return topic_id, None
     return _fuzzy_match_topic(question)
 
 
-def get_ai_response_groq(question, api_key, chat_id=None, profile=None):
-    """Подбор раздела: DeepSeek или OpenRouter → GigaChat (РФ) → Groq."""
-    try:
-        from ai_rate_limit import consume_paid_ai
 
-        limited = consume_paid_ai(chat_id)
-        if limited:
-            return {"ok": False, "text": limited}
-    except Exception:
-        pass
-
-    explicit_sro = False
-    if profile is None:
-        profile, _, explicit_sro = _ai_sro_context(chat_id)
-    else:
-        from sro_context import get_user_sro_id
-
-        explicit_sro = bool(get_user_sro_id(chat_id)) if chat_id is not None else False
-
-    primary_ok = bool(create_llm_client().api_key)
-    groq_ok = bool(api_key and api_key.strip())
-    if not primary_ok and not _gigachat_ok() and not groq_ok:
-        key_name = missing_key_name()
-        return {
-            "ok": False,
-            "text": (
-                "⚠️ ИИ-помощник пока не настроен.\n\n"
-                "Нужен ключ:\n"
-                f"1. {key_name} в .env (LLM_PROVIDER=deepseek или openrouter)\n"
-                "2. Или GigaChat (Сбер, РФ) → GIGACHAT_CREDENTIALS\n"
-                "3. Или Groq → GROQ_API_KEY\n"
-                "4. Перезапустите бота\n\n"
-                "Пока что актуальная информация на сайте:\n"
-                "https://www.srogen.ru/"
-            ),
-        }
-
-    try:
-        topic_id, _backend = _ask_topic_id(question, api_key)
-        if topic_id is None:
-            raise RuntimeError("no llm backend")
-
-        if topic_id == "none" or topic_id not in SITE_TOPICS:
-            voprosy_res = _try_voprosy_answer(
-                question, profile, (profile or {}).get("activity")
-            )
-            if voprosy_res:
-                return voprosy_res
-            try:
-                from doc_qa import probe_document_hit, set_doc_fallback_pending
-
-                hit = probe_document_hit(
-                    question, sro_id=(profile or {}).get("id")
-                )
-                if hit.get("hit"):
-                    if chat_id is not None:
-                        set_doc_fallback_pending(chat_id, question)
-                    return {
-                        "ok": True,
-                        "doc_fallback": True,
-                        "text": hit.get("offer_text") or "",
-                    }
-            except Exception:
-                pass
-            site = (profile or {}).get("site", "https://www.srogen.ru")
-            return {
-                "ok": True,
-                "text": (
-                    f"🤖 По вопросу «<b>{html_esc(question)}</b>» в базе бота точного ответа нет.\n\n"
-                    "Рекомендую посмотреть на официальном сайте:\n"
-                    f"🔗 {site}/\n\n"
-                    "Или свяжитесь с Ассоциацией:\n"
-                    "📞 +7 (495) 775-81-11\n"
-                    "📧 info@srogen.ru"
-                ),
-            }
-
-        if _is_blanki_topic(topic_id):
-            return _format_blanki_response(question, topic_id)
-
-        return _route_topic_response(
-            question,
-            topic_id,
-            profile=profile,
-            explicit_sro=explicit_sro,
-        )
-
-    except Exception:
-        return {
-            "ok": False,
-            "text": (
-                "⚠️ ИИ-помощник временно недоступен. Попробуйте позже или "
-                "перейдите на сайт: https://www.srogen.ru/"
-            ),
-        }
+NOT_FOUND_TEXT = "Не нашёл ответ, выберите раздел в меню"
 
 
-def _ai_sro_context(chat_id):
+def _sro_context(chat_id):
     from sro_context import get_user_profile, get_user_sro_id
     from sro_profiles import get_sro_profile
 
@@ -1541,9 +1252,9 @@ def _try_voprosy_answer(question, profile, activity):
     return format_voprosy_faq_response(question, item, profile=profile)
 
 
-def local_ai_route_kind(question, chat_id=None):
-    """Куда уйдёт вопрос без Groq: partner | blanki | voprosy | site_qa | topic | groq."""
-    _, activity, _ = _ai_sro_context(chat_id)
+def local_route_kind(question, chat_id=None):
+    """Куда уйдёт вопрос: partner | blanki | voprosy | site_qa | topic | none."""
+    _, activity, _ = _sro_context(chat_id)
     if match_partner_query(question):
         return "partner"
     topic_id, _ = match_topic_local(question)
@@ -1557,49 +1268,15 @@ def local_ai_route_kind(question, chat_id=None):
         return "site_qa"
     if topic_id:
         return "topic"
-    return "groq"
+    return "none"
 
 
-def get_ai_response(question, api_key, chat_id=None):
-    try:
-        from ai_rate_limit import bind_chat_id, reset_chat_id
-
-        _ai_cid_token = bind_chat_id(chat_id)
-    except Exception:
-        _ai_cid_token = None
-    try:
-        return _get_ai_response_body(question, api_key, chat_id)
-    finally:
-        if _ai_cid_token is not None:
-            try:
-                from ai_rate_limit import reset_chat_id as _reset_ai_cid
-
-                _reset_ai_cid(_ai_cid_token)
-            except Exception:
-                pass
-
-
-def _get_ai_response_body(question, api_key, chat_id=None):
-    profile, activity, explicit_sro = _ai_sro_context(chat_id)
+def answer_question(question, chat_id=None):
+    profile, activity, explicit_sro = _sro_context(chat_id)
 
     partner_match = match_partner_query(question)
     if partner_match:
         return format_partner_response(question, partner_match)
-
-    # Вопросы «как в положении» важнее ссылки на раздел сайта (реестр и т.п.)
-    try:
-        from doc_qa import question_prefers_documents, try_doc_fallback_offer
-
-        if question_prefers_documents(question):
-            doc_offer = try_doc_fallback_offer(
-                question,
-                chat_id=chat_id,
-                sro_id=(profile or {}).get("id"),
-            )
-            if doc_offer:
-                return doc_offer
-    except Exception:
-        pass
 
     topic_id, suggested = match_topic_local(question)
 
@@ -1628,4 +1305,4 @@ def _get_ai_response_body(question, api_key, chat_id=None):
             profile=profile,
             explicit_sro=explicit_sro,
         )
-    return get_ai_response_groq(question, api_key, chat_id=chat_id, profile=profile)
+    return {"ok": False, "not_found": True, "text": NOT_FOUND_TEXT}

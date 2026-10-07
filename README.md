@@ -1,8 +1,8 @@
 # Бот СРО для Telegram и MAX (GOLD)
 
-Боевой помощник для экосистемы СРО в **Telegram** и **MAX**: поиск организаций по ИНН/названию (~18 тыс. карточек), бланки, планы проверок, FAQ/ИИ по материалам сайтов СРО, режим контролёра с расширенной справкой (Checko).
+Боевой помощник для экосистемы СРО в **Telegram** и **MAX**: поиск организаций по ИНН/названию (~18 тыс. карточек), бланки, планы проверок, FAQ и ответы по материалам сайтов СРО, режим контролёра с расширенной справкой (Checko).
 
-> **Секреты в репозиторий не входят.** Скопируйте `config_keys.example.py` → `config_keys.py` и заполните своими ключами (`BOT_TOKEN`, `MAX_BOT_TOKEN`, ИИ и т.д.).
+> **Секреты в репозиторий не входят.** Скопируйте `config_keys.example.py` → `config_keys.py` и заполните своими ключами (`BOT_TOKEN`, `MAX_BOT_TOKEN`).
 
 ## Каналы
 
@@ -11,14 +11,14 @@
 | **Telegram** | `bot_FINAL_GOLD.py` | `sro-bot` |
 | **MAX** | `bot_MAX.py` | `sro-max-bot` |
 
-Общая логика (поиск, FAQ, контролёр, ИИ) — в shared-модулях; интерфейсы мессенджеров разделены.
+Общая логика (поиск, FAQ, контролёр) — в shared-модулях; интерфейсы мессенджеров разделены.
 
 ## Что умеет (кратко)
 
 - Поиск организации в реестре партнёрских СРО
 - Карточка: статус, проверки, бланки под выбранное СРО
-- ИИ-помощник по FAQ / документам (OpenRouter / GigaChat / Groq)
-- Режим контролёра: меню, «полная информация» по организации, голос/файлы в ИИ
+- Вопрос своими словами: партнёры, темы, «Вопрос-ответ», ссылка на сайт
+- Режим контролёра: меню и «полная информация» по организации (Checko)
 - Работает 24/7 на VPS (оба бота параллельно)
 
 ## Стек
@@ -26,7 +26,7 @@
 - Python 3
 - Telegram: [pyTelegramBotAPI](https://github.com/eternnoir/pyTelegramBotAPI)
 - MAX: [MAX Bot API](https://dev.max.ru/) (`max_api.py`, long polling)
-- `python-docx`, `openpyxl`, `requests`, `pypdf`
+- `python-docx`, `openpyxl`, `requests`
 
 ## Быстрый старт (локально)
 
@@ -35,7 +35,7 @@ pip install -r requirements.txt
 
 copy config_keys.example.py config_keys.py
 copy contacts_data.example.py contacts_data.py
-# config_keys.py: BOT_TOKEN, MAX_BOT_TOKEN, ключи ИИ
+# config_keys.py: BOT_TOKEN, MAX_BOT_TOKEN
 
 # Telegram
 python bot_FINAL_GOLD.py
@@ -62,7 +62,7 @@ python bot_MAX.py
 |--------------|------------|
 | `bot_FINAL_GOLD.py` | Telegram-бот |
 | `bot_MAX.py`, `max_api.py` | MAX-бот и клиент API |
-| корень | shared-модули (поиск, FAQ, controller, ИИ) |
+| корень | shared-модули (поиск, FAQ, controller) |
 | `docs/` | инструкции, презентация, VPS-заметки |
 | `scripts/` | офлайн-утилиты, регрессия, проверка меню MAX |
 | `assets/` | аватар бота |
@@ -77,4 +77,4 @@ python bot_MAX.py
 ## Автор
 
 Павел — разработка ботов для мессенджеров (Telegram, MAX) и автоматизация для СРО / бизнеса.  
-Стек: Python, Bot API, парсинг, VPS, ИИ-ассистенты в разработке.
+Стек: Python, Bot API, парсинг, VPS.

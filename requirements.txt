@@ -1,16 +1,8 @@
 pyTelegramBotAPI
 python-docx
 requests
-pypdf
-faster-whisper
-pymupdf
-olefile
 pyTelegramBotAPI
 python-docx
 requests
-pypdf
-faster-whisper
-pymupdf
-olefile
 certifi
 openpyxl
