@@ -107,9 +107,9 @@ start_maintenance_stub || echo "WARN: continue sync without stub"
 # Ненулевой код — массовый провал (см. daily_sync_failure_reason). Кэш при этом
 # уже записан целиком или остался предыдущим: ботов всё равно поднимаем.
 sync_rc=0
-if ! "$PYTHON" -u reestr_sync.py --daily; then
-  sync_rc=$?
-fi
+# $? внутри `if ! cmd` — это код уже инвертированного теста (0). Код cmd берём справа от ||,
+# иначе set -e оборвёт скрипт, а notify_fail по провалу синка не увидит ошибку.
+"$PYTHON" -u reestr_sync.py --daily || sync_rc=$?
 
 echo "Stopping maintenance stub, starting sro-bot and sro-max-bot..."
 stop_maintenance_stub
