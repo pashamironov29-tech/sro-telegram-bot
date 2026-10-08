@@ -68,7 +68,7 @@ def test_routing_case(text, check):
     assert check(text)
 
 
-KNOWN_VOPROSY_MISS = "Зачем вообще нужно вступать в СРО?"
+WHY_JOIN_SRO = "Зачем вообще нужно вступать в СРО?"
 
 SCREENSHOT_ROUTES = [
     "Какие меры дисциплинарного воздействия бывают в СРО?",
@@ -76,16 +76,7 @@ SCREENSHOT_ROUTES = [
     "Нужно ли вносить сведения о членстве в СРО в Федресурс?",
     "Можно ли учесть взносы в СРО в расходах по налогу на прибыль?",
     "Нужно ли генподрядчику допуск на работы, которые выполняет субподрядчик?",
-    pytest.param(
-        KNOWN_VOPROSY_MISS,
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason=(
-                "Известный провал routing_regression: вопрос уходит в тему по словам "
-                "(topic), а не в раздел «Вопрос-ответ». Не чиним в этой задаче."
-            ),
-        ),
-    ),
+    WHY_JOIN_SRO,
     "По каким основаниям исключают из членов СРО?",
     "Всегда ли нужно членство в СРО для проектной документации?",
     "Какая СРО платит по вреду — генподрядчика или субподрядчика?",
@@ -103,6 +94,6 @@ def test_screenshot_question_routes_to_voprosy(text):
     assert local_route_kind(text) == "voprosy"
 
 
-def test_known_miss_routes_to_topic_today():
-    """Фиксируем текущее поведение известного провала, чтобы заметить, если оно сменится."""
-    assert local_route_kind(KNOWN_VOPROSY_MISS) == "topic"
+def test_why_join_sro_routes_to_voprosy():
+    """Раньше вопрос уходил в тему по словам; теперь это раздел «Вопрос-ответ»."""
+    assert local_route_kind(WHY_JOIN_SRO) == "voprosy"

@@ -175,14 +175,6 @@ def test_below_error_level_not_written(redaction):
     assert _log_text(redaction) == ""
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Известный пробел log_redact: заголовок в виде repr словаря "
-        "{'Authorization': '...'} не вырезается — после имени заголовка идёт кавычка, "
-        "а не ':' или '='. Код бота в этой задаче не меняем."
-    ),
-)
 def test_authorization_in_dict_repr():
     raw = str({"Authorization": FAKE_MAX_TOKEN})
     assert FAKE_MAX_TOKEN not in log_redact.redact_secrets(raw)
