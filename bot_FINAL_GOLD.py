@@ -169,6 +169,8 @@ import re
 import time
 import requests
 
+from log_redact import install_secret_log_redaction, redact_secrets as _redact_secrets
+
 _TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 
@@ -188,15 +190,11 @@ def tg_call(method: str, payload: dict, timeout: float = 30):
 def tg_upload_document(chat_id: int) -> None:
     tg_call("sendChatAction", {"chat_id": chat_id, "action": "upload_document"}, timeout=8)
 
-# 2. Настраиваем, куда и как записывать ошибки
-# Находим папку, где лежит сам скрипт test.py
+# 2. Настраиваем, куда и как записывать ошибки.
+# Токен из traceback не должен попасть ни в файл, ни в stdout/stderr (journald).
 current_dir = os.path.dirname(os.path.abspath(__file__))
 log_file_path = os.path.join(current_dir, "bot_errors.log")
-logging.basicConfig(
-    filename=log_file_path,
-    level=logging.ERROR,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
+install_secret_log_redaction(log_file_path)
 
 apihelper.CONNECT_TIMEOUT = 30
 apihelper.READ_TIMEOUT = 60
@@ -370,13 +368,6 @@ def log_errors(func):
                 pass
             return None
     return wrapper
-
-
-def _redact_secrets(text: str) -> str:
-    """Убрать токен бота из логов и алертов."""
-    text = re.sub(r"/bot\d+:[A-Za-z0-9_-]+/", "/bot***REDACTED***/", text)
-    text = re.sub(r"bot\d+:[A-Za-z0-9_-]{20,}", "bot***REDACTED***", text)
-    return text
 
 
 def _is_tg_transient(exc: BaseException) -> bool:
@@ -3465,7 +3456,7 @@ def handle_inline_search(call):
         bot.answer_callback_query(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.11"
+    BOT_VERSION = "1.12"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 

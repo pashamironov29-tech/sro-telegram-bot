@@ -22,6 +22,8 @@ feedback_questions.jsonl
 nrs_link_mode.json
 doc_checklists.json
 reestr_cache.json
+reestr_cache.json.bak
+.reestr_cache.*.tmp
 reestr_*.log
 *_cache*.json
 september_*.json
