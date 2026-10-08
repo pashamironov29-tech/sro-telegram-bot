@@ -12,8 +12,9 @@ import sys
 
 _BOT_TOKEN_IN_PATH = re.compile(r"/bot\d+:[A-Za-z0-9_-]+")
 _BOT_TOKEN_BARE = re.compile(r"\bbot\d+:[A-Za-z0-9_-]{20,}")
+# Имя заголовка может быть в кавычках: repr словаря {'Authorization': '...'}.
 _AUTH_HEADER = re.compile(
-    r"(?i)(authorization\s*[:=]\s*)([^\s,;\"']+)"
+    r"(?i)((?:[\"']authorization[\"']|authorization)\s*[:=]\s*[\"']?)([^\s,;\"']+)"
 )
 _QUERY_TOKEN = re.compile(r"([?&]token=)[^&\s]+")
 

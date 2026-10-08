@@ -566,7 +566,12 @@ def _match_by_keywords(question):
         return "o_sro"
     if re.search(r"\bсро\b.{0,12}что\s+(это|такое)", normalized):
         return "o_sro"
-    if "зачем" in normalized and re.search(r"\bсро\b", normalized):
+    # «Зачем вступать…» — карточка «Вопрос-ответ», не страница «Об ассоциации».
+    if (
+        "зачем" in normalized
+        and "вступ" not in normalized
+        and re.search(r"\bсро\b", normalized)
+    ):
         return "o_sro"
     if normalized in ("сро", "что сро", "что такое сро", "сро что это", "сро что такое"):
         return "o_sro"
