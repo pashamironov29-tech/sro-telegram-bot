@@ -36,15 +36,23 @@
 | `blanki_sro.py`, `info_list_fill.py` | бланки и инфолист |
 | `vps/` | systemd, таймеры, скрипты `.sh` |
 | `scripts/` | офлайн-проверки, бот их не запускает |
+| `tests/` | pytest: реестр, поиск по ИНН, меню MAX, маршрутизация, логи |
 | `docs/VERSION_HISTORY.md` | журнал версий |
 
 ## Как проверять
 
 Python 3. В `requirements.txt` версия не зафиксирована. На VPS — `/opt/sro-bot/venv` из системного `python3` (Ubuntu 22.04/24.04, `vps/install.sh`).
 
-Pytest-набора нет: в `tests/` пустой `__init__.py`, pytest не в зависимостях.
+Тесты — pytest в `tests/`. Запуск из корня:
 
-Из корня:
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Перед правками и после них тесты должны проходить (допустимы только помеченные `xfail`). pytest лежит в `requirements-dev.txt`, на сервер его не ставить. Тесты в сеть не ходят и настоящие ключи не читают: `tests/conftest.py` подменяет `config_keys` заглушкой и запрещает сокеты, сайты СРО — HTML-образцы в `tests/fixtures`. Telegram-оболочка проверяется подпроцессом (`tests/tg_search_probe.py`): `bot_MAX.py` при импорте ставит `BOT_PLATFORM=max`.
+
+Старые скрипты-проверки из корня (бот их не запускает):
 
 ```bash
 python scripts/routing_regression.py
