@@ -157,10 +157,12 @@ from users_log import touch_user, users_count
 
 assert_prod_sro_ready()
 
-logging.basicConfig(
-    filename="bot_max_errors.log",
-    level=logging.ERROR,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+from log_redact import install_secret_log_redaction
+
+# Токен из traceback не должен попасть ни в файл, ни в stdout/stderr (journald).
+install_secret_log_redaction(
+    "bot_max_errors.log",
+    fmt="%(asctime)s - %(levelname)s - %(message)s",
 )
 
 SRO_SITE = "https://www.srogen.ru"

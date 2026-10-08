@@ -15,6 +15,7 @@ import telebot
 from telebot import types
 
 from config_keys import BOT_TOKEN
+from log_redact import install_secret_log_redaction
 
 MAINTENANCE_TEXT = (
     "🛠 <b>Технические работы</b>\n\n"
@@ -24,7 +25,11 @@ MAINTENANCE_TEXT = (
     "Извините за неудобства."
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+# Заглушка пишет в stderr → journald. Тот же фильтр, что у основного бота.
+install_secret_log_redaction(
+    level=logging.INFO,
+    fmt="%(asctime)s %(levelname)s %(message)s",
+)
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 

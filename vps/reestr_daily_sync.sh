@@ -104,24 +104,52 @@ export PYTHONIOENCODING=utf-8
 
 start_maintenance_stub || echo "WARN: continue sync without stub"
 
-if ! "$PYTHON" -u reestr_sync.py --daily; then
-  notify_fail "reestr_sync.py --daily exited with error (log $LOG)"
-  exit 1
-fi
+# Ненулевой код — массовый провал (см. daily_sync_failure_reason). Кэш при этом
+# уже записан целиком или остался предыдущим: ботов всё равно поднимаем.
+sync_rc=0
+# $? внутри `if ! cmd` — это код уже инвертированного теста (0). Код cmd берём справа от ||,
+# иначе set -e оборвёт скрипт, а notify_fail по провалу синка не увидит ошибку.
+"$PYTHON" -u reestr_sync.py --daily || sync_rc=$?
 
-echo "Stopping maintenance stub, starting sro-bot..."
+echo "Stopping maintenance stub, starting sro-bot and sro-max-bot..."
 stop_maintenance_stub
 
+bot_rc=0
 if ! systemctl start sro-bot; then
-  notify_fail "sync ok, but systemctl start sro-bot failed"
+  bot_rc=1
+else
+  sleep 2
+  if ! systemctl is-active --quiet sro-bot; then
+    bot_rc=1
+  fi
+fi
+systemctl is-active sro-bot || true
+
+# MAX держит реестр в памяти с момента своего старта. Рестарт после целого
+# файла надёжнее, чем перечитывать JSON на каждом сохранении (каждые 200 карточек).
+max_rc=0
+if ! systemctl restart sro-max-bot; then
+  max_rc=1
+else
+  sleep 2
+  if ! systemctl is-active --quiet sro-max-bot; then
+    max_rc=1
+  fi
+fi
+systemctl is-active sro-max-bot || true
+
+if [ "$bot_rc" -ne 0 ]; then
+  notify_fail "systemctl start sro-bot failed (sync rc=$sync_rc, log $LOG)"
   exit 1
 fi
-sleep 2
-if ! systemctl is-active --quiet sro-bot; then
-  notify_fail "sync ok, but sro-bot is not active after start"
+if [ "$max_rc" -ne 0 ]; then
+  notify_fail "systemctl restart sro-max-bot failed (sync rc=$sync_rc, log $LOG)"
   exit 1
 fi
-systemctl is-active sro-bot
+if [ "$sync_rc" -ne 0 ]; then
+  notify_fail "reestr_sync.py --daily exited with error (rc=$sync_rc, log $LOG)"
+  exit 1
+fi
 
 echo "=== $(date -u -Iseconds) UTC: done ==="
 

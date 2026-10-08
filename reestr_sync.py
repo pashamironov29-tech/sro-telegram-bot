@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import shutil
+import stat
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -22,6 +26,10 @@ DETAIL_DELAY = 0.12
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(CURRENT_DIR, "reestr_cache.json")
+# Больше 20% карточек с ошибкой — массовый провал (обрыв сети или вёрстка).
+# Ровно 20% ещё не провал: одиночные таймауты не будят админа каждую ночь.
+# Отдельно: ни один список СРО не разобрался — статусы за ночь не приехали.
+DAILY_CARD_ERROR_RATIO = 0.20
 PLAN_YEAR = datetime.now().year
 INSPECTION_YEARS_SHOWN = 3
 
@@ -424,6 +432,42 @@ def _migrate_org_entry(inn: str, entry: dict) -> dict:
     }
 
 
+def _cache_backup_path() -> str:
+    return CACHE_FILE + ".bak"
+
+
+def _cache_warn(message: str) -> None:
+    print(f"⚠️ {message}", flush=True)
+    # В ботах файл лога принимает только ERROR: warning до него не доходит.
+    if logging.getLogger().handlers:
+        logging.getLogger("reestr_cache").error(message)
+
+
+def _match_cache_owner(tmp_path: str) -> None:
+    """Новый файл после replace не должен стать root:root 0600 — бот его не прочитает."""
+    if not os.path.exists(CACHE_FILE):
+        os.chmod(tmp_path, 0o644)
+        return
+    st = os.stat(CACHE_FILE)
+    mode = stat.S_IMODE(st.st_mode) or 0o644
+    os.chmod(tmp_path, mode)
+    try:
+        os.chown(tmp_path, st.st_uid, st.st_gid)
+    except OSError:
+        if (mode & 0o044) == 0:
+            os.chmod(tmp_path, 0o644)
+
+
+def _snapshot_backup(src: str, dst: str) -> None:
+    """Предыдущая версия остаётся отдельным inode и переживает os.replace."""
+    try:
+        if os.path.lexists(dst):
+            os.unlink(dst)
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
+
+
 def _save_cache(by_inn: dict, show_progress: bool = False) -> None:
     payload = {
         "synced_at": datetime.now().isoformat(timespec="seconds"),
@@ -431,30 +475,133 @@ def _save_cache(by_inn: dict, show_progress: bool = False) -> None:
         "sro_count": len(SRO_SOURCES),
         "organizations": by_inn,
     }
-    with open(CACHE_FILE, "w", encoding="utf-8") as file:
-        json.dump(payload, file, ensure_ascii=False, indent=2)
+    directory = os.path.dirname(os.path.abspath(CACHE_FILE)) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".reestr_cache.",
+        suffix=".tmp",
+        dir=directory,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+        _match_cache_owner(tmp_path)
+        if os.path.exists(CACHE_FILE):
+            _snapshot_backup(CACHE_FILE, _cache_backup_path())
+        os.replace(tmp_path, CACHE_FILE)
+        tmp_path = ""
+        try:
+            dir_fd = os.open(directory, os.O_RDONLY)
+        except OSError:
+            dir_fd = None
+        if dir_fd is not None:
+            try:
+                os.fsync(dir_fd)
+            except OSError:
+                pass
+            finally:
+                os.close(dir_fd)
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
     if show_progress:
         print(f"💾 Кэш сохранён: {len(by_inn)} организаций", flush=True)
+
+
+def _exc_brief(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}".replace("\n", " ")[:240]
+
+
+def _read_cache_orgs(path: str) -> dict[str, dict]:
+    with open(path, encoding="utf-8") as file:
+        payload = json.load(file)
+    if not isinstance(payload, dict):
+        raise ValueError("корень кэша не объект")
+    raw = payload.get("organizations")
+    if not isinstance(raw, dict):
+        raise ValueError("нет объекта organizations")
+    return {inn: _migrate_org_entry(inn, entry) for inn, entry in raw.items()}
+
+
+def _load_cache_backup() -> dict[str, dict]:
+    backup = _cache_backup_path()
+    if not os.path.exists(backup):
+        _cache_warn("Резерв реестра отсутствует")
+        return {}
+    try:
+        return _read_cache_orgs(backup)
+    except Exception as exc:
+        _cache_warn(f"Резерв реестра тоже повреждён ({_exc_brief(exc)})")
+        return {}
+
+
+def _is_blank_value(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    if isinstance(value, (list, dict)) and len(value) == 0:
+        return True
+    return False
+
+
+def _overlay_nonblank(base: dict, incoming: dict) -> dict:
+    """Пустые None/""/[]/{} из новой записи не затирают уже сохранённые поля."""
+    merged = dict(base)
+    for key, value in incoming.items():
+        if _is_blank_value(value):
+            continue
+        merged[key] = value
+    merged.pop("sync_error", None)
+    return merged
+
+
+# Поля, без которых страница — не карточка члена (заглушка, антибот, оборванный HTML).
+_DETAIL_SUBSTANCE_KEYS = (
+    "full_name",
+    "reg_date",
+    "reg_number",
+    "location",
+    "director",
+    "insurance_company",
+    "insurance_sum",
+    "ogrn",
+    "kf_level_vv",
+    "kf_level_odo",
+    "kf_level_vv_raw",
+    "kf_level_odo_raw",
+    "kf_sum_vv",
+    "kf_sum_odo",
+    "inspections",
+    "disciplinary_measures",
+    "status",
+)
+
+
+def _detail_is_empty(detail: dict) -> bool:
+    return all(_is_blank_value(detail.get(key)) for key in _DETAIL_SUBSTANCE_KEYS)
+
+
+def _apply_fetched_detail(by_inn: dict, membership: dict, enriched: dict) -> None:
+    inn = membership["inn"]
+    sro_id = membership["sro_id"]
+    org = by_inn[inn]
+    memberships = org.setdefault("memberships", {})
+    current = memberships.get(sro_id) or membership
+    memberships[sro_id] = _overlay_nonblank(current, enriched)
 
 
 def fetch_reestr_detail(entry: dict) -> dict:
     html = _fetch(entry["url"])
     detail = _parse_detail_page(html)
-    merged = {**entry, **detail}
-    for key in (
-        "reg_date",
-        "reg_number",
-        "location",
-        "director",
-        "insurance_company",
-        "insurance_sum",
-        "full_name",
-        "ogrn",
-        "status",
-    ):
-        if detail.get(key):
-            merged[key] = detail[key]
-    return merged
+    if _detail_is_empty(detail):
+        url = (entry.get("url") or "").strip()
+        raise ValueError(f"пустая карточка {url}".strip())
+    return _overlay_nonblank(entry, detail)
 
 
 _DETAIL_FILL_KEYS = (
@@ -542,13 +689,28 @@ def sync_all_sro_list_only(
     by_inn: dict[str, dict] = load_reestr_cache() if merge_existing else {}
     if show_progress:
         print(f"⏳ Загружаю списки реестров ({len(ids)} СРО)...", flush=True)
+    sro_updated = 0
+    sro_failed = 0
     for sro_id in ids:
         try:
-            sync_one_sro_list(sro_id, by_inn, show_progress=show_progress)
+            added = sync_one_sro_list(sro_id, by_inn, show_progress=show_progress)
         except Exception as exc:
+            sro_failed += 1
             print(f"  ❌ {sro_id}: {exc}", flush=True)
+            continue
+        if added > 0:
+            sro_updated += 1
+        else:
+            sro_failed += 1
+            print(f"  ❌ {sro_id}: список пустой, статус членов не обновлён", flush=True)
     _save_cache(by_inn, show_progress=show_progress)
-    return {"count": len(by_inn), "organizations": by_inn}
+    return {
+        "count": len(by_inn),
+        "organizations": by_inn,
+        "sro_total": len(ids),
+        "sro_updated": sro_updated,
+        "sro_failed": sro_failed,
+    }
 
 
 def sync_all_sro_full(
@@ -579,9 +741,7 @@ def sync_all_sro_full(
             membership = futures[future]
             try:
                 enriched = future.result()
-                inn = membership["inn"]
-                sro_id = membership["sro_id"]
-                by_inn[inn]["memberships"][sro_id] = enriched
+                _apply_fetched_detail(by_inn, membership, enriched)
             except Exception as exc:
                 membership["sync_error"] = str(exc)
             completed += 1
@@ -632,9 +792,7 @@ def sync_all_sro_refresh_inspections(
             membership = futures[future]
             try:
                 enriched = future.result()
-                inn = membership["inn"]
-                sro_id = membership["sro_id"]
-                by_inn[inn]["memberships"][sro_id] = enriched
+                _apply_fetched_detail(by_inn, membership, enriched)
             except Exception as exc:
                 membership["sync_error"] = str(exc)
                 errors += 1
@@ -681,19 +839,40 @@ def sync_all_sro_daily(
         "count": refresh_res.get("count") or list_res.get("count"),
         "refreshed": refresh_res.get("refreshed", 0),
         "errors": refresh_res.get("errors", 0),
+        "sro_total": list_res.get("sro_total", 0),
+        "sro_updated": list_res.get("sro_updated", 0),
+        "sro_failed": list_res.get("sro_failed", 0),
     }
 
 
+def daily_sync_failure_reason(result: dict) -> str | None:
+    """None — ночной прогон можно считать успешным."""
+    sro_total = int(result.get("sro_total") or 0)
+    sro_updated = int(result.get("sro_updated") or 0)
+    if sro_total > 0 and sro_updated == 0:
+        return f"ни одна СРО не обновила список (0/{sro_total})"
+    refreshed = int(result.get("refreshed") or 0)
+    errors = int(result.get("errors") or 0)
+    if refreshed > 0 and (errors / refreshed) > DAILY_CARD_ERROR_RATIO:
+        pct = round(100 * errors / refreshed)
+        return f"ошибки карточек {errors}/{refreshed} ({pct}%) > 20%"
+    return None
+
+
 def load_reestr_cache() -> dict[str, dict]:
-    if not os.path.exists(CACHE_FILE):
-        return {}
-    try:
-        with open(CACHE_FILE, encoding="utf-8") as file:
-            payload = json.load(file)
-        raw = payload.get("organizations", {})
-        return {inn: _migrate_org_entry(inn, entry) for inn, entry in raw.items()}
-    except Exception:
-        return {}
+    backup = _cache_backup_path()
+    if os.path.exists(CACHE_FILE):
+        try:
+            return _read_cache_orgs(CACHE_FILE)
+        except Exception as exc:
+            _cache_warn(
+                f"reestr_cache.json повреждён ({_exc_brief(exc)}), читаю резерв"
+            )
+            return _load_cache_backup()
+    if os.path.exists(backup):
+        _cache_warn("reestr_cache.json нет, читаю резерв")
+        return _load_cache_backup()
+    return {}
 
 
 def get_org_memberships(reestr_data: dict | None) -> dict[str, dict]:
@@ -727,7 +906,9 @@ def enrich_reestr_entry(inn: str, cache: dict[str, dict], timeout: float = 20.0)
             for future in as_completed(futures, timeout=timeout):
                 sro_id = futures[future]
                 try:
-                    org["memberships"][sro_id] = future.result(timeout=0)
+                    enriched = future.result(timeout=0)
+                    current = org["memberships"].get(sro_id) or {}
+                    org["memberships"][sro_id] = _overlay_nonblank(current, enriched)
                     changed = True
                 except Exception:
                     pass
@@ -896,7 +1077,18 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.daily:
-        sync_all_sro_daily(show_progress=True)
+        result = sync_all_sro_daily(show_progress=True)
+        print(
+            "DAILY итог: списки СРО "
+            f"{result.get('sro_updated', 0)}/{result.get('sro_total', 0)}, "
+            f"карточки {result.get('refreshed', 0)}, "
+            f"ошибок {result.get('errors', 0)}",
+            flush=True,
+        )
+        reason = daily_sync_failure_reason(result)
+        if reason:
+            print(f"FAIL: {reason}", flush=True)
+            raise SystemExit(1)
     elif args.refresh_inspections:
         sync_all_sro_refresh_inspections(
             show_progress=True,
