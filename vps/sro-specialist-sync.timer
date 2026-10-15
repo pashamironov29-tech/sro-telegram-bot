@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer: nightly specialist sync (23:30 Europe/Moscow)
+
+[Timer]
+# VPS в UTC → 23:30 МСК = 20:30 UTC. Раньше ночного синка реестра (02:00 МСК).
+OnCalendar=*-*-* 20:30:00 UTC
+Persistent=true
+Unit=sro-specialist-sync.service
+
+[Install]
+WantedBy=timers.target

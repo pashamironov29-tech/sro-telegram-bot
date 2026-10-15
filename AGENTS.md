@@ -6,7 +6,7 @@
 
 Помощник экосистемы СРО Ассоциации «ГЕН». Две оболочки, общая логика.
 
-- Telegram: `bot_FINAL_GOLD.py`, служба `sro-bot`. Версия — `BOT_VERSION` в этом файле (сейчас `1.12.1`).
+- Telegram: `bot_FINAL_GOLD.py`, служба `sro-bot`. Версия — `BOT_VERSION` в этом файле (сейчас `1.13.0`).
 - MAX: `bot_MAX.py`, клиент `max_api.py`, служба `sro-max-bot`. Свой процесс и токен.
 - Режимы и права: `bot_core.py`. Оболочки рисуют кнопки и шлют сообщения.
 - Ответы своими словами, без нейросети: `local_answers.py` — партнёры, темы по словам, «Вопрос-ответ», страницы сайта.
@@ -16,6 +16,7 @@
 ## Что умеет
 
 - Поиск по ИНН и названию, карточка из реестра (`reestr_sync.py`). Кэш `reestr_cache.json` в git не лежит.
+- Поиск специалиста по ФИО: `specialist_sync.py` качает карточки членов 15 СРО из reestr.nostroy.ru / reestr.nopriz.ru в `specialists.sqlite` (в git не лежит). В боте кнопка и `/fio`. Ночной таймер `sro-specialist-sync.timer`.
 - Ночной синк: `sro-reestr-sync.timer`, 02:00 МСК. `vps/reestr_daily_sync.sh` ставит `maintenance_stub.py`, запускает `reestr_sync.py --daily`, поднимает `sro-bot`.
 - Бланки: `blanki_sro.py`. Автозаполнение инфолиста и заявления на проверку: `info_list_fill.py` (заявление об изменениях и доверенность в коде выключены). Опрос инфолиста: `info_list_quiz.py`.
 - FAQ: `voprosy_faq.py`, `faq_menu_content.py`, `sro_site_qa.py`. Взносы: `sro_fees.py`.
@@ -32,6 +33,7 @@
 | `bot_FINAL_GOLD.py`, `bot_MAX.py` | оболочки Telegram и MAX |
 | `bot_core.py`, `local_answers.py` | режимы и ответ без LLM |
 | `reestr_sync.py` | загрузка реестров и карточка |
+| `specialist_reestr.py`, `specialist_sync.py` | специалисты НРС членов СРО и поиск по ФИО |
 | `sro_profiles.py`, `sro_context.py`, `sro_about.py` | 15 СРО, контекст, «об ассоциации» |
 | `blanki_sro.py`, `info_list_fill.py` | бланки и инфолист |
 | `vps/` | systemd, таймеры, скрипты `.sh` |

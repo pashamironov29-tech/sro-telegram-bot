@@ -24,6 +24,56 @@ MARK_BEGIN = "<<<TG_PROBE_JSON>>>"
 MARK_END = "<<<END_TG_PROBE_JSON>>>"
 
 
+def _text_message(uid: int, text: str):
+    return pytypes.SimpleNamespace(
+        text=text,
+        chat=pytypes.SimpleNamespace(id=uid),
+        from_user=pytypes.SimpleNamespace(
+            id=uid, first_name="Тест", last_name="", username="probe"
+        ),
+    )
+
+
+def _seed_specialist_db(path: Path) -> None:
+    from specialist_reestr import SroTarget, connect, ensure_schema, save_member
+
+    target = SroTarget("OGPS", "ОГПС", "nostroy", 87, "СРО-С-020-22072009")
+    conn = connect(path, write=True)
+    try:
+        ensure_schema(conn)
+        save_member(
+            conn,
+            target,
+            {
+                "id": 10,
+                "inn": "7700000099",
+                "short_description": "ООО Проба",
+                "member_status": {"title": "Является членом"},
+            },
+            {
+                "id": 10,
+                "inn": "7700000099",
+                "short_description": "ООО Проба",
+                "director": "Генеральный директор Сидоров Пётр Сергеевич",
+                "member_status": {"title": "Является членом"},
+                "experts_by_category": {
+                    "regular": [
+                        {
+                            "fio": "Сидоров Пётр Сергеевич",
+                            "number": "C-77-100001",
+                            "expert_type": {"title": "Специалист"},
+                        }
+                    ]
+                },
+            },
+            run_id="probe",
+            updated_at="2026-10-15T00:00:00+00:00",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def main(tmp_dir: str) -> None:
     tmp = Path(tmp_dir)
     (tmp / "sro files").mkdir(parents=True, exist_ok=True)
@@ -35,12 +85,16 @@ def main(tmp_dir: str) -> None:
     import log_redact
     import nrs_search_links
     import reestr_sync
+    import specialist_reestr
     import sro_context
     import users_log
 
     users_log.USERS_FILE = tmp / "bot_users.json"
     sro_context._CONTEXT_FILE = tmp / "user_sro_context_tg.json"
     nrs_search_links._MODE_FILE = str(tmp / "nrs_link_mode_tg.json")
+    specialist_reestr._MODE_FILE = str(tmp / "specialist_mode_tg.json")
+    specialist_reestr._await_specialist.clear()
+    specialist_reestr.set_db_path(tmp / "specialists.sqlite")
     feedback_log.FEEDBACK_FILE = tmp / "feedback_questions.jsonl"
     reestr_sync.CACHE_FILE = str(tmp / "reestr_cache.json")
 
@@ -90,6 +144,7 @@ def main(tmp_dir: str) -> None:
             sro_context._pickable_sro_cache,
             sro_context._await_inn,
             sro_context._open_main_after_sro,
+            specialist_reestr._await_specialist,
         ):
             container.clear()
 
@@ -120,6 +175,30 @@ def main(tmp_dir: str) -> None:
     run("looks_like_inn", lambda _uid: [
         tg.looks_like_inn(x) for x in ("7700000001", "770000000004", "12345678", "77000O0001")
     ])
+
+    _seed_specialist_db(tmp / "specialists.sqlite")
+    reset()
+    tg.open_specialist_search(uid)
+    intro_sent = list(sent)
+    sent.clear()
+    tg.handle_text(_text_message(uid, "Сидоров Пётр"))
+    results["specialist"] = {
+        "ret": None,
+        "sent": intro_sent + list(sent),
+        "sro_id": sro_context.get_user_sro_id(uid),
+        "pending": sro_context.pending_sro_ids(uid),
+        "search_mode": local_answers.is_search_mode(uid),
+        "specialist_mode": specialist_reestr.is_specialist_mode(uid),
+    }
+    reset()
+    kb = tg.get_main_keyboard(uid)
+    results["main_keyboard"] = {
+        "ret": None,
+        "sent": [{"text": "", "markup": markup_strings(kb)}],
+        "sro_id": None,
+        "pending": [],
+        "search_mode": False,
+    }
 
     payload = json.dumps(results, ensure_ascii=False)
     sys.stdout.write(f"{MARK_BEGIN}{payload}{MARK_END}\n")

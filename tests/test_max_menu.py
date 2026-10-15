@@ -73,6 +73,7 @@ MENU_ROUTES = [
     ("menu:info", "Полезная информация"),
     ("menu:help", "Справка"),
     ("menu:nrs", "НРС"),
+    ("menu:spec", "ФИО"),
     ("faq:root", "FAQ"),
     ("faq:join", "Для вступающих"),
     ("faq:members", "Действующим членам"),

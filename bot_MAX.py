@@ -83,6 +83,7 @@ from bot_core import (
     prepare_main_menu,
     prepare_nrs,
     prepare_search,
+    prepare_specialist,
     prepare_welcome_reset,
 )
 from nrs_search_links import (
@@ -93,6 +94,11 @@ from nrs_search_links import (
     format_nrs_link_reply,
     is_nrs_link_mode,
     nrs_registry_link_buttons,
+)
+from specialist_reestr import (
+    SPECIALIST_BUTTON,
+    format_search_reply,
+    format_specialist_intro,
 )
 from max_api import (
     MaxApi,
@@ -185,6 +191,7 @@ HELP_TEXT = """ℹ️ <b>Справка — Помощник СРО</b>
 /start — приветствие и главное меню
 /help — эта справка
 /search — поиск организации
+/fio — поиск специалиста по ФИО
 /info — FAQ и бланки
 /controller — меню контролёра (только сотрудникам СРО)
 
@@ -193,6 +200,7 @@ HELP_TEXT = """ℹ️ <b>Справка — Помощник СРО</b>
 <b>Начало:</b> напишите <b>ИНН</b> или нажмите «Поиск организации» под приветствием.
 
 🔍 Поиск — ИНН или часть названия по 15 СРО
+🔎 Поиск специалиста по ФИО — организация, где человек указан в НРС
 ❓ Полезная информация — FAQ и бланки
 Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
 
@@ -229,6 +237,7 @@ def main_keyboard(user_id: int) -> list[dict]:
         return controller_keyboard(user_id)
     rows = [
         row(callback_button(SEARCH_ORG, "menu:search")),
+        row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
         row(callback_button("❓ Полезная информация", "menu:info")),
     ]
     if get_user_sro_id(user_id) or get_user_context(user_id):
@@ -245,6 +254,7 @@ def controller_keyboard(user_id: int | None = None) -> list[dict]:
             callback_button(SEARCH_ORG, "menu:search"),
             callback_button(NRS_LINK_BUTTON, "menu:nrs"),
         ),
+        row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
         row(callback_button("❓ Полезная информация", "menu:info")),
     ]
     if user_id is not None and get_user_sro_id(user_id):
@@ -259,6 +269,7 @@ def controller_menu_text() -> str:
         f"🔍 <b>{SEARCH_ORG}</b> — ИНН или название по всем 15 СРО\n"
         "   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
         f"👤 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ\n"
+        f"🔎 <b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
         "❓ <b>Полезная информация</b> — бланки, документы для проверки\n\n"
         "<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
         f"{OFFICIAL_SOURCE_DISCLAIMER}"
@@ -302,6 +313,7 @@ def menu_keyboard_for_user(user_id: int) -> list[dict]:
 def onboarding_keyboard(user_id: int | None = None) -> list[dict]:
     rows = [
         row(callback_button(SEARCH_ORG, "menu:search")),
+        row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
         row(callback_button(SKIP_ONBOARDING_BUTTON, "menu:skip")),
     ]
     if user_id is not None and is_controller(user_id):
@@ -720,10 +732,11 @@ def welcome_text() -> str:
 <b>С чего начать</b> (кнопки <i>под этим сообщением</i>):
 • <b>ИНН</b> (10 или 12 цифр) — карточка в реестре
 • <b>{SEARCH_ORG}</b> — поиск по названию
+• <b>{SPECIALIST_BUTTON}</b> — специалист НРС и его организация
 • <b>Пропустить</b> — если только вступаете в СРО
 • <b>Справка</b> — команды и подсказки
 
-Команды: /start · /help · /search · /info
+Команды: /start · /help · /search · /fio · /info
 
 {OFFICIAL_SOURCE_DISCLAIMER}"""
 
@@ -748,6 +761,13 @@ def open_controller_menu(user_id: int) -> None:
 def open_nrs(user_id: int) -> None:
     prepare_nrs(user_id)
     send(user_id, format_nrs_link_intro(), kb(back_main_row()))
+
+
+def open_specialist(user_id: int) -> None:
+    prepare_specialist(user_id)
+    clear_await_inn(user_id)
+    clear_joiner_activity_await(user_id)
+    send(user_id, format_specialist_intro(), kb(back_main_row()))
 
 
 def nrs_result_keyboard(query: str) -> list[dict]:
@@ -994,6 +1014,9 @@ def handle_callback(user_id: int, payload: str, update: dict) -> None:
     if payload == "menu:nrs":
         open_nrs(user_id)
         return
+    if payload == "menu:spec":
+        open_specialist(user_id)
+        return
     if payload == "menu:restart":
         clear_user_sro(user_id)
         send_welcome(user_id, update)
@@ -1101,6 +1124,9 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
     if low in ("/search", "search"):
         open_search(user_id)
         return
+    if low in ("/fio", "fio"):
+        open_specialist(user_id)
+        return
     if low in ("/info", "info"):
         prepare_faq(user_id)
         send(user_id, "📁 <b>Полезная информация</b>", info_keyboard())
@@ -1123,6 +1149,9 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
     mode = active_input_mode(user_id)
     if mode == "search":
         handle_universal_search(user_id, user_text)
+        return
+    if mode == "specialist":
+        send(user_id, format_search_reply(user_text), kb(back_main_row()))
         return
     if mode == "nrs":
         send(
@@ -1207,6 +1236,7 @@ def setup_commands() -> None:
                 {"name": "start", "description": "Приветствие: что за бот и с чего начать"},
                 {"name": "help", "description": "Справка: команды и как пользоваться"},
                 {"name": "search", "description": "Поиск организации по ИНН или названию"},
+                {"name": "fio", "description": "Поиск специалиста по ФИО"},
                 {"name": "info", "description": "FAQ, бланки и проверяемые документы"},
                 {"name": "controller", "description": "Меню контролёра СРО (сотрудникам)"},
             ]
