@@ -127,6 +127,7 @@ from bot_core import (
     prepare_main_menu,
     prepare_nrs,
     prepare_search,
+    prepare_specialist,
     prepare_welcome_reset,
 )
 
@@ -153,6 +154,12 @@ from nrs_search_links import (
     format_nrs_link_reply,
     is_nrs_link_mode,
     looks_like_nrs_person_query,
+)
+from specialist_reestr import (
+    SPECIALIST_BUTTON,
+    format_search_reply,
+    format_specialist_intro,
+    is_specialist_mode,
 )
 from voprosy_faq import (
     format_voprosy_faq_response,
@@ -1657,6 +1664,7 @@ def _is_reply_menu_button(user_text: str) -> bool:
         BACK_TO_MENU_BUTTON,
         SEARCH_ORG_BUTTON,
         NRS_LINK_BUTTON,
+        SPECIALIST_BUTTON,
         "❓ Полезная информация",
         "❓ Назад в Полезное",
         BTN_FAQ_ASSOC_HUB,
@@ -1836,6 +1844,7 @@ def setup_bot_commands():
                 types.BotCommand("start", "Главное меню"),
                 types.BotCommand("help", "Справка по боту"),
                 types.BotCommand("search", "Поиск организации по ИНН"),
+                types.BotCommand("fio", "Поиск специалиста по ФИО"),
                 types.BotCommand("info", "FAQ и бланки документов"),
                 types.BotCommand("controller", "Меню контролёра СРО"),
                 types.BotCommand("users", "Список пользователей бота"),
@@ -1889,6 +1898,7 @@ def get_controller_keyboard(chat_id: int | None = None):
     btn_nrs = types.KeyboardButton(NRS_LINK_BUTTON)
     btn_info = types.KeyboardButton("❓ Полезная информация")
     keyboard.add(btn_search, btn_nrs)
+    keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
     keyboard.add(btn_info)
     if chat_id is not None and get_user_sro_id(chat_id):
         keyboard.add(types.KeyboardButton(RESTART_ORG_BUTTON))
@@ -1905,6 +1915,7 @@ def get_main_keyboard(chat_id: int | None = None):
         keyboard.add(btn_search, btn_nrs)
     else:
         keyboard.add(btn_search)
+    keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
     keyboard.add(btn_info)
     if chat_id is not None:
         if should_show_change_context_button(chat_id):
@@ -1991,6 +2002,7 @@ def controller_menu_text() -> str:
         f"🔍 <b>{SEARCH_ORG_BUTTON}</b> — ИНН или название по всем 15 СРО\n"
         f"   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
         f"👤 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ\n"
+        f"🔎 <b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
         f"❓ <b>Полезная информация</b> — бланки, документы для проверки\n\n"
         f"<i>Контекст СРО для бланков — по ИНН или «{CHANGE_CONTEXT_BUTTON}».</i>\n"
         f"<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
@@ -2015,9 +2027,27 @@ def get_nrs_link_keyboard():
     return keyboard
 
 
+def get_specialist_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add(types.KeyboardButton(BACK_TO_MENU_BUTTON))
+    return keyboard
+
+
+def open_specialist_search(chat_id: int) -> None:
+    prepare_specialist(chat_id)
+    clear_await_inn(chat_id)
+    clear_joiner_activity_await(chat_id)
+    finish_button_reply(
+        chat_id,
+        format_specialist_intro(),
+        reply_markup=get_specialist_keyboard(),
+    )
+
+
 def get_onboarding_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.add(types.KeyboardButton(SEARCH_ORG_BUTTON))
+    keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
     keyboard.add(types.KeyboardButton(SKIP_ONBOARDING_BUTTON))
     return keyboard
 
@@ -2255,6 +2285,7 @@ def send_welcome(message):
 3️⃣ Бланки и план проверок — <b>по вашему СРО</b>
 
 🔍 Или сразу нажмите <b>{SEARCH_ORG_BUTTON}</b> — поиск по ИНН/названию без выбора СРО.
+🔎 <b>{SPECIALIST_BUTTON}</b> — в какой организации указан специалист НРС.
 
 🆕 <b>Только вступаете?</b> Чтобы пользоваться меню и бланками до приёма в СРО,
 нажмите <b>Пропустить</b> → направление → <b>конкретное СРО</b>.
@@ -2401,12 +2432,14 @@ def send_help(message):
 /start — главное меню (ИНН или поиск)
 /controller — меню контролёра (служебное)
 /search — поиск организации
+/fio — поиск специалиста по ФИО
 /info — FAQ и бланки
 /help — эта справка
 
 <b>Основные разделы на клавиатуре:</b>
 🔍 Поиск организации — ИНН или название, план проверки и реестр
 👤 Проверить в НРС — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ
+🔎 Поиск специалиста по ФИО — организация, где человек указан в НРС
 ❓ Полезная информация — выписка, НОК, изменения в реестре, FAQ
 Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
 🔄 Другой ИНН / без ИНН — сбросить организацию и начать заново (как /start)
@@ -2418,6 +2451,12 @@ def send_help(message):
         parse_mode="HTML",
         reply_markup=get_main_keyboard(message.chat.id),
     )
+
+
+@bot.message_handler(commands=['fio'])
+@log_errors
+def send_fio_command(message):
+    open_specialist_search(message.chat.id)
 
 
 @bot.message_handler(commands=['search'])
@@ -2511,6 +2550,18 @@ def handle_text(message):
         )
         return
 
+    if (
+        is_specialist_mode(message.chat.id)
+        and not _is_reply_menu_button(user_text)
+    ):
+        finish_button_reply(
+            message.chat.id,
+            format_search_reply(user_text),
+            reply_markup=get_specialist_keyboard(),
+            disable_web_page_preview=True,
+        )
+        return
+
     if try_nrs_text_reply(message.chat.id, user_text):
         return
 
@@ -2555,6 +2606,10 @@ def handle_text(message):
 
     if user_text == SEARCH_ORG_BUTTON:
         _open_org_search(message.chat.id)
+        return
+
+    if user_text == SPECIALIST_BUTTON:
+        open_specialist_search(message.chat.id)
         return
 
     if user_text == CHANGE_CONTEXT_BUTTON:
@@ -3456,7 +3511,7 @@ def handle_inline_search(call):
         bot.answer_callback_query(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.12.1"
+    BOT_VERSION = "1.13.0"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 

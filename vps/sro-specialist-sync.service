@@ -1,0 +1,14 @@
+[Unit]
+Description=SRO GOLD nightly specialist sync (NRS on member cards)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=srobot
+Group=srobot
+WorkingDirectory=/opt/sro-bot
+ExecStart=/bin/bash /opt/sro-bot/vps/specialist_daily_sync.sh
+Nice=10
+# Первый проход ~8 тысяч карточек, дальше короче
+TimeoutStartSec=6h

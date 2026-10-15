@@ -9,6 +9,7 @@ import sys
 
 import pytest
 
+from specialist_reestr import SPECIALIST_BUTTON
 from tests.support import FAKE_TG_TOKEN, INN_ABSENT, ROOT
 
 PROBE = ROOT / "tests" / "tg_search_probe.py"
@@ -97,5 +98,24 @@ def test_tg_looks_like_inn(tg_results):
 
 
 def test_tg_probe_writes_only_to_tmp(tg_results):
-    allowed = {"bot_users.json", "user_sro_context_tg.json", "nrs_link_mode_tg.json"}
+    allowed = {
+        "bot_users.json",
+        "user_sro_context_tg.json",
+        "nrs_link_mode_tg.json",
+        "specialist_mode_tg.json",
+        "specialists.sqlite",
+        "specialists.sqlite-wal",
+        "specialists.sqlite-shm",
+    }
     assert set(tg_results[1]) <= allowed
+
+
+def test_tg_specialist_button_and_fio(tg_results):
+    blob = _blob(tg_results[0]["specialist"])
+    assert "Поиск специалиста по ФИО" in blob
+    assert "Сидоров Пётр Сергеевич" in blob
+    assert "С-77-100001" in blob
+    assert "ООО Проба" in blob
+    assert "reestr.nostroy.ru/member/10" in blob
+    assert tg_results[0]["specialist"]["specialist_mode"] is True
+    assert SPECIALIST_BUTTON in _markup(tg_results[0]["main_keyboard"])

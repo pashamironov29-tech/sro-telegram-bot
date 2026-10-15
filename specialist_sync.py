@@ -1,0 +1,366 @@
+# -*- coding: utf-8 -*-
+"""Скачать действующих членов 15 СРО и специалистов из их карточек.
+
+Реестры: POST https://reestr.nostroy.ru/api/ и https://reestr.nopriz.ru/api/
+Тело JSON, Content-Type: application/json. GET эти адреса не принимают.
+
+Список:  sro/{id}/member/list
+          {"filters": {"member_status": 1}, "page": N, "pageCount": "20"}
+Карточка: member/{id}/info
+
+НОСТРОЙ в списке отдаёт даты обновления — карточку с тем же отпечатком
+повторно не качаем. У НОПРИЗ в списке даты специалистов нет
+(specialists_update_date только в карточке), поэтому карточки НОПРИЗ
+читаем заново каждый полный запуск. Оборванный запуск продолжается сам:
+уже записанные в этом запуске члены пропускаются.
+
+Запуск из каталога бота:
+    python specialist_sync.py
+    python specialist_sync.py --sro OGPS
+    python specialist_sync.py --fresh
+
+База: specialists.sqlite рядом со скриптом (или SPECIALISTS_DB / --db).
+На сервер это не выкладывает и ботов не останавливает.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+import requests
+
+from specialist_reestr import (
+    SroTarget,
+    connect,
+    ensure_schema,
+    init_db,
+    list_stamp,
+    partner_targets,
+    prune_members,
+    save_member,
+    stored_member,
+    touch_skipped_member,
+)
+
+PAGE_COUNT = "20"
+MIN_INTERVAL_SEC = 0.4  # не быстрее ~2.5 запросов в секунду
+REQUEST_TIMEOUT = 45
+RETRY_TIMES = 4
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+# Мало карточек с ошибкой — не будим из‑за пары таймаутов.
+# Доля как у ночного синка реестра: больше 20% и не меньше 10 попыток.
+CARD_ERROR_RATIO = 0.20
+CARD_ERROR_MIN_ATTEMPTS = 10
+
+HEADERS = {
+    "User-Agent": "SRO-Bot/1.0 (+specialist sync)",
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+}
+
+
+class SyncRequestError(RuntimeError):
+    pass
+
+
+class Retryable(RuntimeError):
+    pass
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _run_id_now() -> str:
+    # Микросекунды: два запуска в одну секунду не должны столкнуться.
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+
+class RegistryClient:
+    """POST JSON с паузой, таймаутом и повторами. transport подменяется в тестах."""
+
+    def __init__(
+        self,
+        transport=None,
+        *,
+        min_interval: float = MIN_INTERVAL_SEC,
+        timeout: float = REQUEST_TIMEOUT,
+        retries: int = RETRY_TIMES,
+        sleep=time.sleep,
+        monotonic=time.monotonic,
+    ):
+        self.transport = transport or _requests_transport
+        self.min_interval = min_interval
+        self.timeout = timeout
+        self.retries = max(1, retries)
+        self.sleep = sleep
+        self.monotonic = monotonic
+        self._last = 0.0
+
+    def _pace(self) -> None:
+        elapsed = self.monotonic() - self._last
+        wait = self.min_interval - elapsed
+        if wait > 0:
+            self.sleep(wait)
+        self._last = self.monotonic()
+
+    def post(self, url: str, body: dict) -> dict:
+        last: BaseException | None = None
+        for attempt in range(self.retries):
+            self._pace()
+            try:
+                status, payload = self.transport(url, body, self.timeout)
+                if status == 404:
+                    raise SyncRequestError(f"HTTP 404 {url}")
+                if status in RETRY_STATUSES or status >= 500:
+                    raise Retryable(f"HTTP {status}")
+                if status >= 400:
+                    raise SyncRequestError(f"HTTP {status} {url}")
+                if not isinstance(payload, dict) or payload.get("success") is not True:
+                    raise Retryable("ответ без success")
+                return payload
+            except (requests.Timeout, requests.ConnectionError, Retryable) as exc:
+                last = exc
+                if attempt + 1 >= self.retries:
+                    break
+                self.sleep(min(8, 2**attempt))
+        raise SyncRequestError(f"{url}: {last}")
+
+
+def _requests_transport(url: str, body: dict, timeout: float) -> tuple[int, dict]:
+    response = requests.post(url, json=body, headers=HEADERS, timeout=timeout)
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    return response.status_code, payload
+
+
+def fetch_member_rows(client: RegistryClient, target: SroTarget) -> list[dict]:
+    rows: list[dict] = []
+    page = 1
+    total_pages = 1
+    while page <= total_pages:
+        payload = client.post(
+            target.list_url,
+            {"filters": {"member_status": 1}, "page": page, "pageCount": PAGE_COUNT},
+        )
+        data = payload.get("data") or {}
+        if not isinstance(data, dict):
+            raise SyncRequestError(f"{target.code}: список без data")
+        chunk = data.get("data") or []
+        if not isinstance(chunk, list):
+            raise SyncRequestError(f"{target.code}: data.data не список")
+        if page == 1:
+            try:
+                total_pages = int(float(data.get("countPages") or 1))
+            except (TypeError, ValueError):
+                total_pages = 1
+            total_pages = max(1, total_pages)
+        rows.extend(item for item in chunk if isinstance(item, dict) and item.get("id"))
+        if not chunk:
+            break
+        page += 1
+        if page > 10000:
+            break
+    return rows
+
+
+@dataclass
+class SroStats:
+    code: str
+    listed: int = 0
+    fetched: int = 0
+    skipped: int = 0
+    specialists: int = 0
+    errors: int = 0
+    removed: int = 0
+    list_failed: bool = False
+
+    @property
+    def too_many_card_errors(self) -> bool:
+        if self.errors == 0:
+            return False
+        attempted = self.fetched + self.errors
+        if attempted < CARD_ERROR_MIN_ATTEMPTS:
+            return self.errors == attempted
+        return (self.errors / attempted) > CARD_ERROR_RATIO
+
+
+def _should_skip(stored, row: dict, *, run_id: str, resume: bool) -> bool:
+    if stored is None:
+        return False
+    if resume and (stored["fetched_run"] or "") == run_id:
+        return True
+    stamp = list_stamp(row)
+    if stamp and (stored["list_stamp"] or "") == stamp and stored["updated_at"]:
+        return True
+    return False
+
+
+def sync_sro(
+    conn,
+    client: RegistryClient,
+    target: SroTarget,
+    *,
+    run_id: str,
+    resume: bool,
+) -> SroStats:
+    stats = SroStats(code=target.code)
+    try:
+        rows = fetch_member_rows(client, target)
+    except SyncRequestError as exc:
+        stats.list_failed = True
+        print(f"{target.code}: список не скачался: {exc}", flush=True)
+        return stats
+
+    seen: set[int] = set()
+    stats.listed = len(rows)
+    print(
+        f"{target.code} {target.registry} id={target.registry_id}: в списке {stats.listed}",
+        flush=True,
+    )
+    updated_at = _utc_now()
+    for index, row in enumerate(rows, start=1):
+        member_id = int(row["id"])
+        seen.add(member_id)
+        stored = stored_member(conn, target.registry, member_id)
+        if _should_skip(stored, row, run_id=run_id, resume=resume):
+            touch_skipped_member(conn, target, row, run_id=run_id)
+            conn.commit()
+            stats.skipped += 1
+            continue
+        try:
+            payload = client.post(target.info_url(member_id), {})
+        except SyncRequestError as exc:
+            stats.errors += 1
+            print(f"{target.code}: карточка {member_id} не скачалась: {exc}", flush=True)
+            continue
+        card = payload.get("data") or {}
+        if not isinstance(card, dict):
+            stats.errors += 1
+            print(f"{target.code}: карточка {member_id} без объекта data", flush=True)
+            continue
+        stats.specialists += save_member(
+            conn,
+            target,
+            row,
+            card,
+            run_id=run_id,
+            updated_at=updated_at,
+        )
+        conn.commit()
+        stats.fetched += 1
+        if index % 100 == 0 or index == stats.listed:
+            print(
+                f"  {target.code}: {index}/{stats.listed}, "
+                f"карточек {stats.fetched}, пропуск {stats.skipped}, ошибок {stats.errors}",
+                flush=True,
+            )
+    stats.removed = prune_members(conn, target, seen)
+    conn.commit()
+    print(
+        f"{target.code}: готово, специалистов за этот проход {stats.specialists}, "
+        f"убрано членов {stats.removed}",
+        flush=True,
+    )
+    return stats
+
+
+def _last_run(conn):
+    ensure_schema(conn)
+    return conn.execute(
+        "SELECT run_id, status FROM sync_runs ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+
+
+def resolve_run(conn, *, fresh: bool) -> tuple[str, bool]:
+    """(run_id, resume). Незаконченный запуск продолжаем, пока не передан --fresh."""
+    ensure_schema(conn)
+    last = _last_run(conn)
+    if last is not None and last["status"] == "running" and not fresh:
+        print(f"Продолжаю запуск {last['run_id']}", flush=True)
+        return last["run_id"], True
+    run_id = _run_id_now()
+    conn.execute(
+        "INSERT INTO sync_runs (run_id, started_at, finished_at, status) VALUES (?, ?, '', 'running')",
+        (run_id, _utc_now()),
+    )
+    conn.commit()
+    return run_id, False
+
+
+def finish_run(conn, run_id: str, *, ok: bool) -> None:
+    conn.execute(
+        "UPDATE sync_runs SET finished_at=?, status=? WHERE run_id=?",
+        (_utc_now(), "ok" if ok else "failed", run_id),
+    )
+    conn.commit()
+
+
+def sync_all(
+    *,
+    db_path=None,
+    codes: list[str] | None = None,
+    fresh: bool = False,
+    client: RegistryClient | None = None,
+) -> int:
+    path = init_db(db_path)
+    client = client or RegistryClient()
+    targets = partner_targets(codes)
+    conn = connect(path, write=True)
+    try:
+        run_id, resume = resolve_run(conn, fresh=fresh)
+        # --sro не должен выкидывать чужих членов: prune только по переданным СРО.
+        failed: list[str] = []
+        try:
+            for target in targets:
+                stats = sync_sro(conn, client, target, run_id=run_id, resume=resume)
+                if stats.list_failed or stats.too_many_card_errors:
+                    failed.append(target.code)
+        except Exception:
+            # Запуск остаётся running — следующий старт его продолжит.
+            print("Синк оборвался, следующий запуск продолжит этот же проход.", flush=True)
+            raise
+        finish_run(conn, run_id, ok=not failed)
+    finally:
+        conn.close()
+    if failed:
+        print(f"С ошибкой: {', '.join(failed)}", flush=True)
+        return 1
+    print("Синк специалистов завершён.", flush=True)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Синк специалистов НРС 15 партнёрских СРО")
+    parser.add_argument("--db", default="", help="путь к SQLite (иначе specialists.sqlite)")
+    parser.add_argument(
+        "--sro",
+        action="append",
+        default=None,
+        help="только эти коды, можно несколько раз: --sro OGPS --sro OGPP",
+    )
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="не продолжать оборванный запуск, начать новый",
+    )
+    args = parser.parse_args(argv)
+    from specialist_reestr import set_db_path
+
+    if args.db:
+        set_db_path(args.db)
+    return sync_all(codes=args.sro, fresh=args.fresh)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("Остановлено.", flush=True)
+        sys.exit(130)

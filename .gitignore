@@ -23,6 +23,11 @@ nrs_link_mode.json
 doc_checklists.json
 reestr_cache.json
 reestr_cache.json.bak
+specialists.sqlite
+specialists.sqlite-wal
+specialists.sqlite-shm
+specialist_mode.json
+specialist_mode_*.json
 .reestr_cache.*.tmp
 reestr_*.log
 *_cache*.json
