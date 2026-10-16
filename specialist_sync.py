@@ -5,14 +5,22 @@
 Тело JSON, Content-Type: application/json. GET эти адреса не принимают.
 
 Список:  sro/{id}/member/list
-          {"filters": {"member_status": 1}, "page": N, "pageCount": "20"}
+          {"filters": {"member_status": 1}, "page": N, "pageCount": "20",
+           "sortBy": {"inn": "ASC"}}
 Карточка: member/{id}/info
 
+Сколько страниц просить, решаем по полю count (сколько членов), а не только
+по countPages: если страницы оборвались раньше, список считаем битым и
+старых членов не удаляем. Сортировка по id реестр молча игнорирует, страницы
+тогда повторяются и часть членов пропадает. Сортировка по ИНН применяется
+и даёт полный список без повторов.
+
 НОСТРОЙ в списке отдаёт даты обновления — карточку с тем же отпечатком
-повторно не качаем. У НОПРИЗ в списке даты специалистов нет
-(specialists_update_date только в карточке), поэтому карточки НОПРИЗ
-читаем заново каждый полный запуск. Оборванный запуск продолжается сам:
-уже записанные в этом запуске члены пропускаются.
+повторно не качаем. Исключение: дата специалистов в списке есть, а в базе
+у члена ни одной строки — карточку читаем снова. У НОПРИЗ в списке даты
+специалистов нет (specialists_update_date только в карточке), поэтому
+карточки НОПРИЗ читаем заново каждый полный запуск. Оборванный запуск
+продолжается сам: уже записанные в этом запуске члены пропускаются.
 
 Запуск из каталога бота:
     python specialist_sync.py
@@ -43,10 +51,14 @@ from specialist_reestr import (
     prune_members,
     save_member,
     stored_member,
+    stored_specialist_count,
     touch_skipped_member,
 )
 
 PAGE_COUNT = "20"
+# sortBy.id реестр не применяет: страницы пересекаются и теряют членов.
+# sortBy.inn применяется, список сходится с полем count.
+SORT_BY = {"inn": "ASC"}
 MIN_INTERVAL_SEC = 0.4  # не быстрее ~2.5 запросов в секунду
 REQUEST_TIMEOUT = 45
 RETRY_TIMES = 4
@@ -140,14 +152,51 @@ def _requests_transport(url: str, body: dict, timeout: float) -> tuple[int, dict
     return response.status_code, payload
 
 
-def fetch_member_rows(client: RegistryClient, target: SroTarget) -> list[dict]:
+def _as_int(value) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _expert_mark(row: dict) -> bool:
+    """В строке списка есть отметка, что специалисты у члена публиковались."""
+    if not isinstance(row, dict):
+        return False
+    for key in (
+        "last_updated_experts_at_date_time_string",
+        "specialists_update_date",
+    ):
+        if str(row.get(key) or "").strip():
+            return True
+    return False
+
+
+@dataclass
+class MemberList:
+    rows: list[dict]
+    api_count: int | None
+
+
+def fetch_member_rows(client: RegistryClient, target: SroTarget) -> MemberList:
+    """Все действующие члены. Неполный список — ошибка, чтобы не стереть базу."""
     rows: list[dict] = []
+    seen: set[int] = set()
     page = 1
     total_pages = 1
-    while page <= total_pages:
+    api_count: int | None = None
+    empty_hits = 0
+    while page <= 10000:
         payload = client.post(
             target.list_url,
-            {"filters": {"member_status": 1}, "page": page, "pageCount": PAGE_COUNT},
+            {
+                "filters": {"member_status": 1},
+                "page": page,
+                "pageCount": PAGE_COUNT,
+                "sortBy": SORT_BY,
+            },
         )
         data = payload.get("data") or {}
         if not isinstance(data, dict):
@@ -156,18 +205,45 @@ def fetch_member_rows(client: RegistryClient, target: SroTarget) -> list[dict]:
         if not isinstance(chunk, list):
             raise SyncRequestError(f"{target.code}: data.data не список")
         if page == 1:
-            try:
-                total_pages = int(float(data.get("countPages") or 1))
-            except (TypeError, ValueError):
-                total_pages = 1
-            total_pages = max(1, total_pages)
-        rows.extend(item for item in chunk if isinstance(item, dict) and item.get("id"))
+            api_count = _as_int(data.get("count"))
+            parsed_pages = _as_int(data.get("countPages"))
+            total_pages = max(1, parsed_pages or 1)
+        added = 0
+        for item in chunk:
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            member_id = int(item["id"])
+            if member_id in seen:
+                continue
+            seen.add(member_id)
+            rows.append(item)
+            added += 1
+        if api_count is not None and len(seen) >= api_count:
+            break
         if not chunk:
+            # Пустая страница в середине списка — один повтор, потом стоп.
+            empty_hits += 1
+            if empty_hits >= 2:
+                break
+            continue
+        empty_hits = 0
+        if added == 0:
+            # Та же страница пришла ещё раз: дальше листать бессмысленно.
+            break
+        if page >= total_pages and (api_count is None or len(seen) >= (api_count or 0)):
             break
         page += 1
-        if page > 10000:
+        if api_count is not None and page > api_count + 1:
             break
-    return rows
+    if api_count is not None and len(seen) < api_count:
+        raise SyncRequestError(
+            f"{target.code}: список неполный, {len(seen)} из {api_count}"
+        )
+    if api_count is None and page < total_pages:
+        raise SyncRequestError(
+            f"{target.code}: список оборвался на странице {page} из {total_pages}"
+        )
+    return MemberList(rows=rows, api_count=api_count)
 
 
 @dataclass
@@ -179,6 +255,9 @@ class SroStats:
     specialists: int = 0
     errors: int = 0
     removed: int = 0
+    api_count: int | None = None
+    expert_dated: int = 0
+    empty_despite_date: int = 0
     list_failed: bool = False
 
     @property
@@ -191,13 +270,24 @@ class SroStats:
         return (self.errors / attempted) > CARD_ERROR_RATIO
 
 
-def _should_skip(stored, row: dict, *, run_id: str, resume: bool) -> bool:
+def _should_skip(
+    stored,
+    row: dict,
+    *,
+    run_id: str,
+    resume: bool,
+    specialist_count: int,
+) -> bool:
     if stored is None:
         return False
     if resume and (stored["fetched_run"] or "") == run_id:
         return True
     stamp = list_stamp(row)
     if stamp and (stored["list_stamp"] or "") == stamp and stored["updated_at"]:
+        # Дата специалистов в списке есть, а строк в базе нет — карточку
+        # когда-то сохранили пустой. Читаем ещё раз.
+        if _expert_mark(row) and specialist_count <= 0:
+            return False
         return True
     return False
 
@@ -212,16 +302,22 @@ def sync_sro(
 ) -> SroStats:
     stats = SroStats(code=target.code)
     try:
-        rows = fetch_member_rows(client, target)
+        fetched = fetch_member_rows(client, target)
     except SyncRequestError as exc:
         stats.list_failed = True
         print(f"{target.code}: список не скачался: {exc}", flush=True)
         return stats
 
+    rows = fetched.rows
     seen: set[int] = set()
     stats.listed = len(rows)
+    stats.api_count = fetched.api_count
+    stats.expert_dated = sum(1 for row in rows if _expert_mark(row))
+    expected = stats.api_count if stats.api_count is not None else stats.listed
     print(
-        f"{target.code} {target.registry} id={target.registry_id}: в списке {stats.listed}",
+        f"{target.code} {target.registry} id={target.registry_id}: "
+        f"в списке {stats.listed} из {expected}, "
+        f"с датой специалистов {stats.expert_dated}",
         flush=True,
     )
     updated_at = _utc_now()
@@ -229,7 +325,16 @@ def sync_sro(
         member_id = int(row["id"])
         seen.add(member_id)
         stored = stored_member(conn, target.registry, member_id)
-        if _should_skip(stored, row, run_id=run_id, resume=resume):
+        already = (
+            stored_specialist_count(conn, target.registry, member_id) if stored else 0
+        )
+        if _should_skip(
+            stored,
+            row,
+            run_id=run_id,
+            resume=resume,
+            specialist_count=already,
+        ):
             touch_skipped_member(conn, target, row, run_id=run_id)
             conn.commit()
             stats.skipped += 1
@@ -245,7 +350,7 @@ def sync_sro(
             stats.errors += 1
             print(f"{target.code}: карточка {member_id} без объекта data", flush=True)
             continue
-        stats.specialists += save_member(
+        saved = save_member(
             conn,
             target,
             row,
@@ -253,6 +358,14 @@ def sync_sro(
             run_id=run_id,
             updated_at=updated_at,
         )
+        stats.specialists += saved
+        if _expert_mark(row) and saved == 0:
+            stats.empty_despite_date += 1
+            print(
+                f"{target.code}: член {member_id} с датой специалистов, "
+                "в карточке строк нет",
+                flush=True,
+            )
         conn.commit()
         stats.fetched += 1
         if index % 100 == 0 or index == stats.listed:
@@ -265,6 +378,7 @@ def sync_sro(
     conn.commit()
     print(
         f"{target.code}: готово, специалистов за этот проход {stats.specialists}, "
+        f"пустых при дате специалистов {stats.empty_despite_date}, "
         f"убрано членов {stats.removed}",
         flush=True,
     )
@@ -320,7 +434,11 @@ def sync_all(
         try:
             for target in targets:
                 stats = sync_sro(conn, client, target, run_id=run_id, resume=resume)
-                if stats.list_failed or stats.too_many_card_errors:
+                if (
+                    stats.list_failed
+                    or stats.too_many_card_errors
+                    or stats.empty_despite_date
+                ):
                     failed.append(target.code)
         except Exception:
             # Запуск остаётся running — следующий старт его продолжит.

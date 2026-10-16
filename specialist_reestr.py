@@ -536,6 +536,14 @@ def stored_member(conn: sqlite3.Connection, registry: str, member_id: int) -> sq
     ).fetchone()
 
 
+def stored_specialist_count(conn: sqlite3.Connection, registry: str, member_id: int) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM specialists WHERE registry=? AND member_id=?",
+        (registry, int(member_id)),
+    ).fetchone()
+    return int(row[0] if row else 0)
+
+
 def db_has_rows(path: Path | None = None) -> bool:
     target = path or db_path()
     if not target.is_file():
