@@ -168,6 +168,7 @@ class ScriptedApi:
         if url.endswith("/member/list"):
             assert body["filters"] == {"member_status": 1}
             assert body["pageCount"] == "20"
+            assert body["sortBy"] == {"inn": "ASC"}
             page = body["page"]
             if "/sro/87/" in url:
                 if self.drop_second:
@@ -241,6 +242,91 @@ def test_sync_drops_member_missing_from_list(tmp_path):
     assert sync_all(db_path=db, codes=["OGPS"], fresh=True, client=_client(api)) == 0
     assert search_people("иванова", db=db).status == "none"
     assert search_people("сидоров", db=db).status == "ok"
+
+
+def _payload(rows, *, count, pages):
+    return {
+        "success": True,
+        "data": {"count": count, "countPages": pages, "data": rows},
+    }
+
+
+class _TwoPageDespiteCountPages:
+    """countPages врёт «1 страница», но count больше и вторая страница есть."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, url, body, timeout):
+        self.calls.append((url, body))
+        if url.endswith("/member/list"):
+            page = body["page"]
+            if page == 1:
+                return 200, _payload([_nostroy_row(1)], count=2, pages=1)
+            if page == 2:
+                return 200, _payload([_nostroy_row(2)], count=2, pages=1)
+            return 200, _payload([], count=2, pages=1)
+        if url.endswith("/member/1/info"):
+            return 200, {"success": True, "data": _nostroy_card(1, "Сидоров Пётр Сергеевич")}
+        if url.endswith("/member/2/info"):
+            return 200, {"success": True, "data": _nostroy_card(2, "Иванова Мария")}
+        raise AssertionError(url)
+
+
+def test_list_follows_count_when_count_pages_is_short(tmp_path):
+    db = tmp_path / "spec.sqlite"
+    api = _TwoPageDespiteCountPages()
+    assert sync_all(db_path=db, codes=["OGPS"], fresh=True, client=_client(api)) == 0
+    assert search_people("сидоров", db=db).status == "ok"
+    assert search_people("иванова", db=db).status == "ok"
+    assert any(body.get("page") == 2 for _url, body in api.calls)
+
+
+class _ShortListApi:
+    """Вторая страница пустая, хотя count обещает двух членов."""
+
+    def __call__(self, url, body, timeout):
+        if url.endswith("/member/list"):
+            page = body["page"]
+            if page == 1:
+                return 200, _payload([_nostroy_row(1)], count=2, pages=2)
+            return 200, _payload([], count=2, pages=2)
+        if url.endswith("/member/1/info"):
+            return 200, {"success": True, "data": _nostroy_card(1, "Сидоров Пётр Сергеевич")}
+        raise AssertionError(url)
+
+
+def test_short_list_does_not_drop_members_already_stored(tmp_path):
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(ScriptedApi())
+    ) == 0
+    assert search_people("иванова", db=db).status == "ok"
+    assert sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(_ShortListApi())
+    ) == 1
+    # Список битый — Иванову из базы не стираем.
+    assert search_people("иванова", db=db).status == "ok"
+    assert search_people("сидоров", db=db).status == "ok"
+
+
+def test_refetch_card_when_expert_date_has_no_specialist_rows(tmp_path):
+    db = tmp_path / "spec.sqlite"
+    api = ScriptedApi()
+    assert sync_all(db_path=db, codes=["OGPS"], fresh=True, client=_client(api)) == 0
+    from specialist_reestr import connect
+
+    conn = connect(db, write=True)
+    try:
+        conn.execute("DELETE FROM specialists")
+        conn.commit()
+    finally:
+        conn.close()
+    api.calls.clear()
+    assert sync_all(db_path=db, codes=["OGPS"], fresh=True, client=_client(api)) == 0
+    assert _info_calls(api, "/member/1/info") == 1
+    assert _info_calls(api, "/member/2/info") == 1
+    assert search_people("иванова", db=db).status == "ok"
 
 
 def test_resume_skips_cards_already_stored_in_this_run(tmp_path):
