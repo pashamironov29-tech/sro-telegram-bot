@@ -223,27 +223,29 @@ def test_feedback_ignores_menu_button_and_expires(monkeypatch):
     assert feedback_log.is_awaiting_expected(chat_id) is False
 
 
-def test_corrupt_users_journal_is_not_replaced(tmp_path, monkeypatch):
+def test_corrupt_users_journal_is_quarantined(tmp_path, monkeypatch):
     import users_log
 
     path = tmp_path / "bot_users.json"
     monkeypatch.setattr(users_log, "USERS_FILE", path)
-    path.write_text(
+    original = (
         json.dumps(
             {"users": {"5": {"chat_id": 5, "full_name": "Живой", "username": "ok"}}},
             ensure_ascii=False,
         )
-        + "\nNOT JSON",
-        encoding="utf-8",
+        + "\nNOT JSON"
     )
-    before = path.read_text(encoding="utf-8")
+    path.write_text(original, encoding="utf-8")
     message = types.SimpleNamespace(
         chat=types.SimpleNamespace(id=9),
         from_user=types.SimpleNamespace(id=9, first_name="Новый", last_name="", username="n"),
     )
-    assert touch_user(message) is False
-    assert path.read_text(encoding="utf-8") == before
-    assert "Живой" in before
+    assert touch_user(message) is True
+    bad = list(path.parent.glob("bot_users.json.bad-*"))
+    assert len(bad) == 1
+    assert bad[0].read_text(encoding="utf-8") == original
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["users"]["9"]["full_name"] == "Новый"
 
 
 def test_plan_year_is_taken_at_format_time_and_from_filename(monkeypatch, tmp_path):

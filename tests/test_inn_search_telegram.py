@@ -100,6 +100,7 @@ def test_tg_looks_like_inn(tg_results):
 def test_tg_probe_writes_only_to_tmp(tg_results):
     allowed = {
         "bot_users.json",
+        "bot_users.json.lock",
         "user_sro_context_tg.json",
         "nrs_link_mode_tg.json",
         "specialist_mode_tg.json",

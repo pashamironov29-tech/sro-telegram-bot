@@ -526,21 +526,47 @@ def touch_skipped_member(
     )
 
 
+def allow_prune_codes(extra: list[str] | None = None) -> set[str]:
+    """Коды СРО, для которых порог «меньше половины» не блокирует удаление.
+
+    CLI ``--allow-prune`` и переменная ``SPECIALIST_ALLOW_PRUNE=CODE1,CODE2``.
+    """
+    codes: set[str] = set()
+    raw = os.environ.get("SPECIALIST_ALLOW_PRUNE", "")
+    for part in raw.split(","):
+        text = part.strip().upper()
+        if text:
+            codes.add(text)
+    for item in extra or []:
+        text = str(item).strip().upper()
+        if text:
+            codes.add(text)
+    return codes
+
+
 def prune_members(
     conn: sqlite3.Connection,
     target: SroTarget,
     seen_ids: set[int],
+    *,
+    allow_prune: bool = False,
 ) -> int:
     """Убрать членов СРО, которых больше нет среди действующих. Вернуть, сколько членов.
 
     Пустой набор и резкое падение числа не удаляют ничего: так битый ответ реестра
     не стирает СРО. Решение «это сбой» принимает синк и пишет админам.
+    allow_prune или SPECIALIST_ALLOW_PRUNE для этой СРО порог пропускают.
+    Пустой список при пустой базе — не отказ: удалять нечего.
     """
     before = conn.execute(
         "SELECT COUNT(*) FROM members WHERE registry=? AND sro_code=?",
         (target.registry, target.code),
     ).fetchone()[0]
-    if list_would_wipe_too_much(len(seen_ids), int(before)):
+    before_n = int(before)
+    if before_n <= 0 and not seen_ids:
+        return 0
+    permitted = allow_prune or target.code.upper() in allow_prune_codes()
+    if not permitted and list_would_wipe_too_much(len(seen_ids), before_n):
         return 0
     conn.execute("DROP TABLE IF EXISTS seen_members")
     conn.execute("CREATE TEMP TABLE seen_members (id INTEGER PRIMARY KEY)")

@@ -48,6 +48,10 @@ python bot_MAX.py
 
 На Windows: `START_BOT.ps1` / `START_BOT.bat` (Telegram), `START_BOT_MAX.ps1` / `START_BOT_MAX.bat` (MAX).
 
+Telegram и MAX пишут один `bot_users.json`. На Linux процессы разводит lock-файл. На Windows `fcntl` нет: два бота одновременно делят журнал без межпроцессной блокировки, часть записей может потеряться.
+
+Разово снять порог «меньше половины» у синка специалистов: `python specialist_sync.py --allow-prune OGPS` (флаг можно повторить). Переменную `SPECIALIST_ALLOW_PRUNE` в unit-файл `sro-specialist-sync.service` насовсем не прописывать — ночной синк иначе будет удалять членов при каждом коротком списке.
+
 ## Чего нет в git (намеренно)
 
 | Исключено | Почему |
