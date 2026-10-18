@@ -147,6 +147,7 @@ def test_oserror_on_read_does_not_quarantine(tmp_path, monkeypatch, capsys):
             raise PermissionError("Секретноеимя")
         return real_read_text(self, *args, **kwargs)
 
+    monkeypatch.setattr(users_log, "_read_error_logged_at", None)
     monkeypatch.setattr(Path, "read_text", boom)
     assert touch_user(_message(9, first_name="Новый")) is False
     assert list(tmp_path.glob("bot_users.json.bad-*")) == []
@@ -156,6 +157,42 @@ def test_oserror_on_read_does_not_quarantine(tmp_path, monkeypatch, capsys):
     assert "Секретноеимя" not in logged
     assert "Живой" not in logged
     assert "Новый" not in logged
+
+
+def test_read_error_log_is_throttled_until_success_or_interval(tmp_path, monkeypatch, capsys):
+    """Постоянная ошибка чтения не печатается на каждое сообщение."""
+    path = tmp_path / "bot_users.json"
+    monkeypatch.setattr(users_log, "USERS_FILE", path)
+    monkeypatch.setattr(users_log, "_read_error_logged_at", None)
+    path.write_text('{"users": {}}', encoding="utf-8")
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(users_log, "_monotonic", lambda: clock["t"])
+    state = {"fail": True}
+    real_read_text = Path.read_text
+
+    def boom(self, *args, **kwargs):
+        if Path(self) == path and state["fail"]:
+            raise PermissionError("Секретноеимя")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", boom)
+    assert touch_user(_message(3)) is False
+    assert touch_user(_message(4)) is False
+    assert capsys.readouterr().out.count("пропускаю") == 1
+
+    clock["t"] += users_log.READ_ERROR_LOG_INTERVAL_SEC
+    assert touch_user(_message(5)) is False
+    assert capsys.readouterr().out.count("пропускаю") == 1
+
+    state["fail"] = False
+    assert touch_user(_message(6)) is True
+    assert "пропускаю" not in capsys.readouterr().out
+
+    state["fail"] = True
+    assert touch_user(_message(7)) is False
+    logged = capsys.readouterr().out
+    assert logged.count("пропускаю") == 1
+    assert "Секретноеимя" not in logged
 
 
 def test_tmp_name_is_not_the_shared_one(tmp_path, monkeypatch):

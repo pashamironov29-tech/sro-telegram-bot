@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -30,6 +31,10 @@ USERS_FILE = ROOT / "bot_users.json"
 
 _thread_lock = threading.Lock()
 _corrupt_warned = False
+# Постоянная ошибка чтения не должна печататься на каждое сообщение.
+READ_ERROR_LOG_INTERVAL_SEC = 10 * 60
+_read_error_logged_at: float | None = None
+_monotonic = time.monotonic
 
 
 def _html(text: str) -> str:
@@ -43,6 +48,22 @@ def _now_iso() -> str:
 def _log(text: str) -> None:
     """Короткая строка в лог процесса. Без имён, id и кусков журнала."""
     print(text, flush=True)
+
+
+def _log_read_error() -> None:
+    """Одна строка на окно. После успешного чтения окно сбрасывается."""
+    global _read_error_logged_at
+    now = _monotonic()
+    last = _read_error_logged_at
+    if last is not None and now - last < READ_ERROR_LOG_INTERVAL_SEC:
+        return
+    _read_error_logged_at = now
+    _log("users_log: журнал не прочитался, запись пропускаю")
+
+
+def _note_read_ok() -> None:
+    global _read_error_logged_at
+    _read_error_logged_at = None
 
 
 @contextmanager
@@ -106,30 +127,35 @@ def _load() -> dict | None:
     Пустым словарём это не подменяем: следующая запись стёрла бы историю.
     """
     if not USERS_FILE.is_file():
+        _note_read_ok()
         return {"users": {}}
     try:
         raw = USERS_FILE.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         if not _quarantine_corrupt():
             return None
+        _note_read_ok()
         return {"users": {}}
     except OSError:
         # Нет прав или диск: файл не битый, в .bad не уносим и поверх не пишем.
-        _log("users_log: журнал не прочитался, запись пропускаю")
+        _log_read_error()
         return None
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
         if not _quarantine_corrupt():
             return None
+        _note_read_ok()
         return {"users": {}}
     if not isinstance(data, dict):
         if not _quarantine_corrupt():
             return None
+        _note_read_ok()
         return {"users": {}}
     users = data.get("users")
     if not isinstance(users, dict):
         data["users"] = {}
+    _note_read_ok()
     return data
 
 
