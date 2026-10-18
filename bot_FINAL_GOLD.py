@@ -110,7 +110,7 @@ from sro_fees import fees_doc_path, format_fees_message
 from reestr_sync import (
     load_reestr_cache, format_company_card, enrich_reestr_entry,
     plany_key_from_filename, sro_display_name, get_org_memberships,
-    membership_needs_detail_fetch,
+    membership_needs_detail_fetch, ensure_plan_month_year,
 )
 from controller_access import (
     can_use_checko,
@@ -310,12 +310,20 @@ def notify_admins_about_error(func_name: str, event, exc: BaseException) -> bool
 
     body = _alert_body(tb_short, action_cut, exc_cut)
     # Не режем готовый HTML посередине тега — укорачиваем traceback / action.
+    # Если длина не уменьшилась (keep упирается в 200, а префикс «…» её возвращает),
+    # выходим, иначе цикл не кончается.
     while len(body) > 4000 and len(tb_short) > 200:
         keep = max(200, len(tb_short) - 400)
-        tb_short = "…\n" + tb_short[-keep:]
+        shortened = "…\n" + tb_short[-keep:]
+        if len(shortened) >= len(tb_short):
+            break
+        tb_short = shortened
         body = _alert_body(tb_short, action_cut, exc_cut)
     while len(body) > 4000 and len(action_cut) > 80:
-        action_cut = action_cut[: max(40, len(action_cut) - 100)] + "…"
+        shortened_action = action_cut[: max(40, len(action_cut) - 100)] + "…"
+        if len(shortened_action) >= len(action_cut):
+            break
+        action_cut = shortened_action
         body = _alert_body(tb_short, action_cut, exc_cut)
     if len(body) > 4000:
         body = _alert_body(tb_short[:400], action_cut[:80], exc_cut[:200])
@@ -538,6 +546,7 @@ def _apply_plan_row(
     current_month: str,
     sro_key: str,
     sro_label: str,
+    file_name: str,
 ) -> str:
     """Разобрать одну строку плана. Вернуть актуальный месяц.
 
@@ -552,7 +561,7 @@ def _apply_plan_row(
     if len(cells_text) == 1 or (len(cells_text) == 2 and not inn):
         for text in cells_text:
             if any(month in text.lower() for month in _PLAN_MONTHS):
-                return text
+                return ensure_plan_month_year(text, file_name)
         return current_month
     if not inn:
         return current_month
@@ -593,6 +602,7 @@ def _load_plan_file(path: str, file_name: str, database: dict) -> None:
                     current_month,
                     sro_key,
                     sro_label,
+                    file_name,
                 )
             except Exception as exc:
                 print(f"⚠️ Строка плана {file_name} пропущена: {exc}")
@@ -1708,6 +1718,21 @@ def finish_feedback(chat_id: int, expected: str | None) -> None:
         )
 
 
+def _feedback_text_is_navigation(user_text: str) -> bool:
+    """Команда или кнопка меню: не записывать как ожидаемый ответ."""
+    text = (user_text or "").strip()
+    if not text:
+        return False
+    if text.startswith("/"):
+        return True
+    if resolve_navigation_command(text):
+        return True
+    if _is_reply_menu_button(text):
+        return True
+    labels = {label for _key, label, _cap in BLANKI_MENU_ITEMS}
+    return text in labels
+
+
 def _is_reply_menu_button(user_text: str) -> bool:
     """Текст reply-кнопки меню — не запрос НРС."""
     if user_text in (
@@ -2542,9 +2567,13 @@ def handle_text(message):
     if is_awaiting_expected(message.chat.id):
         if user_text.lower() in ("/skip", "skip", "пропустить"):
             finish_feedback(message.chat.id, None)
+            return
+        # Команда и кнопка меню — не «ожидаемый ответ».
+        if _feedback_text_is_navigation(user_text):
+            cancel_await_expected(message.chat.id)
         else:
             finish_feedback(message.chat.id, user_text)
-        return
+            return
 
     if is_info_list_quiz_active(message.chat.id):
         # «Назад» / команды меню — не ответы опроса
@@ -3561,7 +3590,7 @@ def handle_inline_search(call):
         bot.answer_callback_query(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.13.1"
+    BOT_VERSION = "1.13.2"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 
