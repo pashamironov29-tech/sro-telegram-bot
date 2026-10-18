@@ -30,7 +30,6 @@ CACHE_FILE = os.path.join(CURRENT_DIR, "reestr_cache.json")
 # Ровно 20% ещё не провал: одиночные таймауты не будят админа каждую ночь.
 # Отдельно: ни один список СРО не разобрался — статусы за ночь не приехали.
 DAILY_CARD_ERROR_RATIO = 0.20
-PLAN_YEAR = datetime.now().year
 INSPECTION_YEARS_SHOWN = 3
 
 # Все партнёрские СРО: id -> название и URL реестра
@@ -953,13 +952,34 @@ def _inspection_icon(result: str) -> str:
     return "✅" if "не выявлено" in result.lower() else "⚠️"
 
 
+def plan_year_from_filename(file_name: str) -> int | None:
+    """Год из имени файла плана, например OGPS_2025.docx."""
+    match = re.search(r"(20\d{2})", os.path.splitext(os.path.basename(file_name))[0])
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def ensure_plan_month_year(month: str, file_name: str) -> str:
+    """Если в ячейке месяца нет года, дописать год из имени файла."""
+    part = (month or "").strip()
+    if not part or part == "Не указан":
+        return part or month
+    if re.search(r"\d{4}", part):
+        return part
+    year = plan_year_from_filename(file_name)
+    if year is None:
+        return part
+    return f"{part} {year}"
+
+
 def _format_plan_month(month_raw: str) -> str:
     if not month_raw or month_raw == "Не указан":
         return "не указан"
     part = month_raw.strip()
     if re.search(r"\d{4}", part):
         return part
-    return f"{part} {PLAN_YEAR}"
+    return f"{part} {datetime.now().year}"
 
 
 def _parse_plany_sro_map(plany_data: dict) -> dict[str, str]:
