@@ -11,8 +11,9 @@ FEEDBACK_FILE = ROOT / "feedback_questions.jsonl"
 
 # chat_id -> последний ответ (для кнопки / фразы)
 _last_ai: dict[int, dict] = {}
-# chat_id -> ждём текст «что ожидали»
-_await_expected: set[int] = set()
+# chat_id -> момент, когда спросили «какой ответ ждали»
+_await_expected: dict[int, float] = {}
+AWAIT_TTL_SEC = 10 * 60
 
 FB_CALLBACK = "fb:bad"
 FB_PHRASES = (
@@ -49,19 +50,25 @@ def has_last_ai(chat_id: int) -> bool:
 
 
 def is_awaiting_expected(chat_id: int) -> bool:
-    return chat_id in _await_expected
+    started = _await_expected.get(chat_id)
+    if started is None:
+        return False
+    if time.time() - started > AWAIT_TTL_SEC:
+        _await_expected.pop(chat_id, None)
+        return False
+    return True
 
 
 def begin_await_expected(chat_id: int) -> bool:
     """True, если есть что логировать (был ответ)."""
     if chat_id not in _last_ai:
         return False
-    _await_expected.add(chat_id)
+    _await_expected[chat_id] = time.time()
     return True
 
 
 def cancel_await_expected(chat_id: int) -> None:
-    _await_expected.discard(chat_id)
+    _await_expected.pop(chat_id, None)
 
 
 def is_feedback_phrase(text: str) -> bool:
@@ -73,7 +80,7 @@ def append_feedback(chat_id: int, expected: str | None) -> bool:
     """Пишет строку в jsonl. False, если нечего писать."""
     last = _last_ai.get(chat_id)
     if not last:
-        _await_expected.discard(chat_id)
+        _await_expected.pop(chat_id, None)
         return False
     row = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
@@ -86,5 +93,5 @@ def append_feedback(chat_id: int, expected: str | None) -> bool:
     }
     with FEEDBACK_FILE.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    _await_expected.discard(chat_id)
+    _await_expected.pop(chat_id, None)
     return True
