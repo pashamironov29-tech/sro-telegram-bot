@@ -499,6 +499,119 @@ def _name_from_plan_row_cells(cells_text: list[str], inn: str, inn_index: int) -
     return "Организация СРО"
 
 
+_PLAN_MONTHS = (
+    "январь",
+    "февраль",
+    "март",
+    "апрель",
+    "май",
+    "июнь",
+    "июль",
+    "август",
+    "сентябрь",
+    "октябрь",
+    "ноябрь",
+    "декабрь",
+)
+
+
+def _plan_row_cells(row) -> list[str]:
+    cells_text: list[str] = []
+    for cell in row.cells:
+        txt = cell.text.strip()
+        if txt and txt not in cells_text:
+            cells_text.append(txt)
+    return cells_text
+
+
+def _plan_inn(cells_text: list[str]) -> tuple[str, int]:
+    for idx, text in enumerate(cells_text):
+        clean_text = text.replace(" ", "").replace("\xa0", "")
+        if clean_text.isdigit() and (9 <= len(clean_text) <= 12):
+            return clean_text, idx
+    return "", -1
+
+
+def _apply_plan_row(
+    database: dict,
+    cells_text: list[str],
+    current_month: str,
+    sro_key: str,
+    sro_label: str,
+) -> str:
+    """Разобрать одну строку плана. Вернуть актуальный месяц.
+
+    Заголовок — одна ячейка или две без ИНН («Март» и «2026»).
+    «ООО» и ИНН — член, даже если ячеек ровно две.
+    """
+    if not cells_text:
+        return current_month
+    inn, inn_index = _plan_inn(cells_text)
+    # Раньше здесь было cells_text.isdigit() у списка: строка из двух ячеек
+    # роняла загрузку всей папки.
+    if len(cells_text) == 1 or (len(cells_text) == 2 and not inn):
+        for text in cells_text:
+            if any(month in text.lower() for month in _PLAN_MONTHS):
+                return text
+        return current_month
+    if not inn:
+        return current_month
+    name = _name_from_plan_row_cells(cells_text, inn, inn_index)
+    # УМНАЯ СКЛЕЙКА ДЛЯ ОРГАНИЗАЦИЙ В НЕСКОЛЬКИХ СРО
+    if inn in database:
+        old = database[inn]["name"]
+        if _looks_like_address(old) and not _looks_like_address(name):
+            database[inn]["name"] = name
+        elif old[0].isdigit() and name and not name[0].isdigit():
+            database[inn]["name"] = name
+        plans = database[inn].setdefault("plans", {})
+        if sro_key not in plans:
+            plans[sro_key] = current_month
+            database[inn]["sro_type"] = ", ".join(sro_display_name(k) for k in plans)
+            database[inn]["month"] = ", ".join(plans.values())
+    else:
+        database[inn] = {
+            "name": name,
+            "plans": {sro_key: current_month},
+            "month": current_month,
+            "sro_type": sro_label,
+        }
+    return current_month
+
+
+def _load_plan_file(path: str, file_name: str, database: dict) -> None:
+    sro_key = plany_key_from_filename(file_name)
+    sro_label = sro_display_name(sro_key)
+    doc = Document(path)
+    current_month = "Не указан"
+    for table in doc.tables:
+        for row in table.rows:
+            try:
+                current_month = _apply_plan_row(
+                    database,
+                    _plan_row_cells(row),
+                    current_month,
+                    sro_key,
+                    sro_label,
+                )
+            except Exception as exc:
+                print(f"⚠️ Строка плана {file_name} пропущена: {exc}")
+
+
+def load_plany_folder(plany_path: str, database: dict | None = None) -> dict:
+    """Прочитать docx из папки plany. Битый файл или строка не останавливают остальные."""
+    if database is None:
+        database = {}
+    files = [name for name in os.listdir(plany_path) if name.endswith(".docx")]
+    for file_name in files:
+        full_path = os.path.join(plany_path, file_name)
+        try:
+            _load_plan_file(full_path, file_name, database)
+        except Exception as exc:
+            print(f"⚠️ План {file_name} пропущен: {exc}")
+    return database
+
+
 # Бот автоматически берет скрытый путь из файла secrets.py
 folder_path = SRO_FILES_DIR
 plany_path = os.path.join(folder_path, "plany")
@@ -506,71 +619,8 @@ plany_path = os.path.join(folder_path, "plany")
 print("⏳ Начинаю сканирование подпапки plany...")
 
 try:
-    months_keywords = ["январь", "февраль", "март", "апрель", "май", "июнь", 
-                       "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
-
-    files = [f for f in os.listdir(plany_path) if f.endswith('.docx')]
-    
-    for file_name in files:
-        full_path = os.path.join(plany_path, file_name)
-        sro_key = plany_key_from_filename(file_name)
-        sro_label = sro_display_name(sro_key)
-        doc = Document(full_path)
-        current_month = "Не указан"
-
-        for table in doc.tables:
-            for row in table.rows:
-                cells_text = []
-                for cell in row.cells:
-                    txt = cell.text.strip()
-                    if txt and txt not in cells_text:
-                        cells_text.append(txt)
-                
-                if len(cells_text) == 1 or (len(cells_text) == 2 and cells_text.isdigit()):
-                    for t in cells_text:
-                        if any(m in t.lower() for m in months_keywords):
-                            current_month = t
-                            break
-                    continue
-
-                if len(cells_text) >= 2:
-                    inn = ""
-                    inn_index = -1
-                    
-                    for idx, text in enumerate(cells_text):
-                        clean_text = text.replace(" ", "").replace("\xa0", "")
-                        if clean_text.isdigit() and (9 <= len(clean_text) <= 12):
-                            inn = clean_text
-                            inn_index = idx
-                            break
-                    
-                    if inn:
-                        name = _name_from_plan_row_cells(cells_text, inn, inn_index)
-
-                           # УМНАЯ СКЛЕЙКА ДЛЯ ОРГАНИЗАЦИЙ В НЕСКОЛЬКИХ СРО
-                        if inn in sro_database:
-                            old = sro_database[inn]["name"]
-                            if _looks_like_address(old) and not _looks_like_address(name):
-                                sro_database[inn]["name"] = name
-                            elif old[0].isdigit() and name and not name[0].isdigit():
-                                sro_database[inn]["name"] = name
-                            plans = sro_database[inn].setdefault("plans", {})
-                            if sro_key not in plans:
-                                plans[sro_key] = current_month
-                                sro_database[inn]["sro_type"] = ", ".join(
-                                    sro_display_name(k) for k in plans
-                                )
-                                sro_database[inn]["month"] = ", ".join(plans.values())
-                        else:
-                            sro_database[inn] = {
-                                "name": name,
-                                "plans": {sro_key: current_month},
-                                "month": current_month,
-                                "sro_type": sro_label,
-                            }
-                        
+    load_plany_folder(plany_path, sro_database)
     print(f"✅ ВСЕ БАЗЫ СИНХРОНИЗИРОВАНЫ! Всего в памяти: {len(sro_database)}")
-
 except Exception as e:
     print(f"❌ Ошибка при чтении папки plany: {e}")
 
@@ -3511,7 +3561,7 @@ def handle_inline_search(call):
         bot.answer_callback_query(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.13.0"
+    BOT_VERSION = "1.13.1"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 

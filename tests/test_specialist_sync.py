@@ -544,6 +544,167 @@ def test_max_fio_outside_mode_does_not_open_local_registry(max_bot):
     assert "С-77-100001" not in max_bot.blob()
 
 
+class _ListApi:
+    """Список членов с заданными id и своим count. Карточки — обычные."""
+
+    def __init__(self, member_ids, *, count=None, omit_count=False):
+        self.member_ids = list(member_ids)
+        self.count = len(self.member_ids) if count is None else count
+        self.omit_count = omit_count
+        self.calls: list[tuple[str, dict]] = []
+
+    def __call__(self, url, body, timeout):
+        self.calls.append((url, body))
+        if url.endswith("/member/list"):
+            rows = [_nostroy_row(member_id) for member_id in self.member_ids]
+            data = {"countPages": 1, "data": rows}
+            if not self.omit_count:
+                data["count"] = self.count
+            return 200, {"success": True, "data": data}
+        prefix = "/member/"
+        if "/member/" in url and url.endswith("/info"):
+            member_id = int(url.rstrip("/").split("/")[-2])
+            fios = {
+                1: "Сидоров Пётр Сергеевич",
+                2: "Иванова Мария",
+                3: "Кузнецов Олег",
+                4: "Орлова Анна",
+            }
+            fio = fios.get(member_id, f"Специалист {member_id}")
+            return 200, {"success": True, "data": _nostroy_card(member_id, fio)}
+        raise AssertionError(url)
+
+
+class _EmptyCardApi(_ListApi):
+    """Тот же состав, но отпечаток списка новый и карточка члена 1 пустая.
+
+    Новый отпечаток не даёт _should_skip пропустить загрузку: иначе пустой
+    ответ просто не дошёл бы до save_member.
+    """
+
+    def __init__(self, member_ids, card_for_1, stamp="02.02.2026 00:00:00"):
+        super().__init__(member_ids)
+        self.card_for_1 = card_for_1
+        self.stamp = stamp
+
+    def __call__(self, url, body, timeout):
+        self.calls.append((url, body))
+        if url.endswith("/member/list"):
+            rows = [_nostroy_row(member_id, stamp=self.stamp) for member_id in self.member_ids]
+            return 200, {
+                "success": True,
+                "data": {"count": len(rows), "countPages": 1, "data": rows},
+            }
+        if url.endswith("/member/1/info"):
+            return 200, {"success": True, "data": self.card_for_1}
+        return _ListApi.__call__(self, url, body, timeout)
+
+
+def test_empty_member_list_does_not_wipe_sro(tmp_path, monkeypatch):
+    """Пустой успешный список (count 0 и без count) не удаляет членов СРО."""
+    import specialist_sync
+
+    alerts: list[str] = []
+    monkeypatch.setattr(specialist_sync, "notify_admins", alerts.append, raising=False)
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(_ListApi([1, 2]))
+    ) == 0
+    assert search_people("иванова", db=db).status == "ok"
+    assert search_people("сидоров", db=db).status == "ok"
+
+    alerts.clear()
+    rc = sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_ListApi([], count=0)),
+    )
+    assert search_people("иванова", db=db).status == "ok"
+    assert search_people("сидоров", db=db).status == "ok"
+    assert rc == 1
+    assert alerts
+    assert "OGPS" in alerts[0]
+
+    alerts.clear()
+    rc = sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_ListApi([], omit_count=True)),
+    )
+    assert search_people("иванова", db=db).status == "ok"
+    assert search_people("сидоров", db=db).status == "ok"
+    assert rc == 1
+    assert alerts
+
+
+def test_shrunk_member_list_does_not_wipe_sro(tmp_path, monkeypatch):
+    """Список меньше половины уже лежащих в базе не вычищает остальных."""
+    import specialist_sync
+
+    alerts: list[str] = []
+    monkeypatch.setattr(specialist_sync, "notify_admins", alerts.append, raising=False)
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(_ListApi([1, 2, 3, 4]))
+    ) == 0
+    for fio in ("сидоров", "иванова", "кузнецов", "орлова"):
+        assert search_people(fio, db=db).status == "ok"
+
+    rc = sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(_ListApi([1]))
+    )
+    for fio in ("сидоров", "иванова", "кузнецов", "орлова"):
+        assert search_people(fio, db=db).status == "ok", fio
+    assert rc == 1
+    assert alerts
+    assert "OGPS" in alerts[0]
+
+
+def test_empty_card_does_not_wipe_specialists(tmp_path):
+    """Пустая и невалидная карточка не стирает уже сохранённых специалистов."""
+    from specialist_reestr import connect, stored_specialist_count
+
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(_ListApi([1, 2]))
+    ) == 0
+    assert search_people("сидоров", db=db).status == "ok"
+
+    rc = sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_EmptyCardApi([1, 2], {})),
+    )
+    # Пустой data:{} не должен стереть уже лежащего специалиста.
+    assert search_people("сидоров", db=db).status == "ok"
+    assert search_people("иванова", db=db).status == "ok"
+    assert rc == 0
+
+    target = SroTarget("OGPS", "ОГПС", "nostroy", 87, "СРО-С-020-22072009")
+    conn = connect(db, write=True)
+    try:
+        before = stored_specialist_count(conn, "nostroy", 1)
+        assert before >= 1
+        row = _nostroy_row(1)
+        for bad_card in ({}, {"id": 1}, {"unexpected": True}):
+            save_member(
+                conn,
+                target,
+                row,
+                bad_card,
+                run_id="bad",
+                updated_at="2026-10-18T00:00:00+00:00",
+            )
+            assert stored_specialist_count(conn, "nostroy", 1) == before
+        conn.commit()
+    finally:
+        conn.close()
+    assert search_people("сидоров", db=db).status == "ok"
+
+
 def test_timeout_is_retried():
     state = {"n": 0}
 

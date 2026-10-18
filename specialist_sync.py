@@ -11,7 +11,9 @@
 
 Сколько страниц просить, решаем по полю count (сколько членов), а не только
 по countPages: если страницы оборвались раньше, список считаем битым и
-старых членов не удаляем. Сортировка по id реестр молча игнорирует, страницы
+старых членов не удаляем. Пустой список и список меньше половины уже
+записанных членов тоже не удаляет строки: в лог и админам уходит
+предупреждение. Сортировка по id реестр молча игнорирует, страницы
 тогда повторяются и часть членов пропадает. Сортировка по ИНН применяется
 и даёт полный список без повторов.
 
@@ -34,6 +36,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import sys
 import time
 from dataclasses import dataclass
@@ -43,10 +46,12 @@ import requests
 
 from specialist_reestr import (
     SroTarget,
+    card_has_substance,
     connect,
     ensure_schema,
     init_db,
     list_stamp,
+    list_would_wipe_too_much,
     partner_targets,
     prune_members,
     save_member,
@@ -259,6 +264,7 @@ class SroStats:
     expert_dated: int = 0
     empty_despite_date: int = 0
     list_failed: bool = False
+    list_rejected: bool = False
 
     @property
     def too_many_card_errors(self) -> bool:
@@ -292,6 +298,67 @@ def _should_skip(
     return False
 
 
+def _admin_ids(raw) -> list[int]:
+    if raw is None:
+        return []
+    if isinstance(raw, (int, str)):
+        try:
+            return [int(raw)]
+        except (TypeError, ValueError):
+            return []
+    out: list[int] = []
+    for item in raw:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def notify_admins(text: str) -> None:
+    """Сообщение в Telegram админам. Сбой отправки синк не роняет и токен не печатает."""
+    try:
+        from config_keys import BOT_ADMIN_IDS, BOT_TOKEN
+    except Exception:
+        print("админам не отправил: нет config_keys", flush=True)
+        return
+    ids = _admin_ids(BOT_ADMIN_IDS)
+    token = BOT_TOKEN.strip() if isinstance(BOT_TOKEN, str) else ""
+    if not ids or not token:
+        print("админам не отправил: BOT_ADMIN_IDS пуст", flush=True)
+        return
+    api = f"https://api.telegram.org/bot{token}/sendMessage"
+    safe = html.escape(text)[:3500]
+    for admin_id in ids:
+        try:
+            requests.post(
+                api,
+                json={
+                    "chat_id": admin_id,
+                    "text": safe,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+                timeout=20,
+            )
+        except Exception:
+            print(f"админам не отправил: telegram {admin_id}", flush=True)
+
+
+def _stored_members(conn, target: SroTarget) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM members WHERE registry=? AND sro_code=?",
+        (target.registry, target.code),
+    ).fetchone()
+    return int(row[0] if row else 0)
+
+
+def _reject_member_list(stats: SroStats, reason: str) -> None:
+    stats.list_rejected = True
+    print(reason, flush=True)
+    notify_admins(reason)
+
+
 def sync_sro(
     conn,
     client: RegistryClient,
@@ -320,6 +387,14 @@ def sync_sro(
         f"с датой специалистов {stats.expert_dated}",
         flush=True,
     )
+    if not rows:
+        _reject_member_list(
+            stats,
+            f"{target.code}: реестр вернул пустой список членов, "
+            "старых записей не удаляю",
+        )
+        return stats
+    stored_before = _stored_members(conn, target)
     updated_at = _utc_now()
     for index, row in enumerate(rows, start=1):
         member_id = int(row["id"])
@@ -350,6 +425,13 @@ def sync_sro(
             stats.errors += 1
             print(f"{target.code}: карточка {member_id} без объекта data", flush=True)
             continue
+        if not card_has_substance(card):
+            stats.errors += 1
+            print(
+                f"{target.code}: карточка {member_id} пустая, специалистов не трогаю",
+                flush=True,
+            )
+            continue
         saved = save_member(
             conn,
             target,
@@ -374,7 +456,15 @@ def sync_sro(
                 f"карточек {stats.fetched}, пропуск {stats.skipped}, ошибок {stats.errors}",
                 flush=True,
             )
-    stats.removed = prune_members(conn, target, seen)
+    if list_would_wipe_too_much(len(seen), stored_before):
+        stats.removed = 0
+        _reject_member_list(
+            stats,
+            f"{target.code}: в списке {len(seen)} членов, в базе {stored_before}. "
+            "Меньше половины — старых записей не удаляю",
+        )
+    else:
+        stats.removed = prune_members(conn, target, seen)
     conn.commit()
     print(
         f"{target.code}: готово, специалистов за этот проход {stats.specialists}, "
@@ -436,6 +526,7 @@ def sync_all(
                 stats = sync_sro(conn, client, target, run_id=run_id, resume=resume)
                 if (
                     stats.list_failed
+                    or stats.list_rejected
                     or stats.too_many_card_errors
                     or stats.empty_despite_date
                 ):
