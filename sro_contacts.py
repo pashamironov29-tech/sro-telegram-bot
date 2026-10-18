@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+from html import escape as html_escape
 
 from sro_profiles import site_base_for_sro
 from reestr_sync import sro_display_name
@@ -235,7 +236,9 @@ def format_sro_contacts(sro_id: str, *, question: str | None = None) -> str | No
     site = site_base_for_sro(sro_id).replace("https://", "").replace("http://", "")
     lines_out: list[str] = []
     if question:
-        lines_out.append(f"🤖 По запросу «<b>{question}</b>»:\n")
+        lines_out.append(
+            f"🤖 По запросу «<b>{html_escape(question, quote=False)}</b>»:\n"
+        )
     lines_out.append(f"📞 <b>Связаться с {name}</b>\n")
 
     for row in data.get("lines") or []:

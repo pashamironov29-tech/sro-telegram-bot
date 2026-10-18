@@ -110,7 +110,7 @@ from sro_fees import fees_doc_path, format_fees_message
 from reestr_sync import (
     load_reestr_cache, format_company_card, enrich_reestr_entry,
     plany_key_from_filename, sro_display_name, get_org_memberships,
-    membership_needs_detail_fetch,
+    membership_needs_detail_fetch, ensure_plan_month_year,
 )
 from controller_access import (
     can_use_checko,
@@ -310,12 +310,20 @@ def notify_admins_about_error(func_name: str, event, exc: BaseException) -> bool
 
     body = _alert_body(tb_short, action_cut, exc_cut)
     # Не режем готовый HTML посередине тега — укорачиваем traceback / action.
+    # Если длина не уменьшилась (keep упирается в 200, а префикс «…» её возвращает),
+    # выходим, иначе цикл не кончается.
     while len(body) > 4000 and len(tb_short) > 200:
         keep = max(200, len(tb_short) - 400)
-        tb_short = "…\n" + tb_short[-keep:]
+        shortened = "…\n" + tb_short[-keep:]
+        if len(shortened) >= len(tb_short):
+            break
+        tb_short = shortened
         body = _alert_body(tb_short, action_cut, exc_cut)
     while len(body) > 4000 and len(action_cut) > 80:
-        action_cut = action_cut[: max(40, len(action_cut) - 100)] + "…"
+        shortened_action = action_cut[: max(40, len(action_cut) - 100)] + "…"
+        if len(shortened_action) >= len(action_cut):
+            break
+        action_cut = shortened_action
         body = _alert_body(tb_short, action_cut, exc_cut)
     if len(body) > 4000:
         body = _alert_body(tb_short[:400], action_cut[:80], exc_cut[:200])
@@ -499,6 +507,121 @@ def _name_from_plan_row_cells(cells_text: list[str], inn: str, inn_index: int) -
     return "Организация СРО"
 
 
+_PLAN_MONTHS = (
+    "январь",
+    "февраль",
+    "март",
+    "апрель",
+    "май",
+    "июнь",
+    "июль",
+    "август",
+    "сентябрь",
+    "октябрь",
+    "ноябрь",
+    "декабрь",
+)
+
+
+def _plan_row_cells(row) -> list[str]:
+    cells_text: list[str] = []
+    for cell in row.cells:
+        txt = cell.text.strip()
+        if txt and txt not in cells_text:
+            cells_text.append(txt)
+    return cells_text
+
+
+def _plan_inn(cells_text: list[str]) -> tuple[str, int]:
+    for idx, text in enumerate(cells_text):
+        clean_text = text.replace(" ", "").replace("\xa0", "")
+        if clean_text.isdigit() and (9 <= len(clean_text) <= 12):
+            return clean_text, idx
+    return "", -1
+
+
+def _apply_plan_row(
+    database: dict,
+    cells_text: list[str],
+    current_month: str,
+    sro_key: str,
+    sro_label: str,
+    file_name: str,
+) -> str:
+    """Разобрать одну строку плана. Вернуть актуальный месяц.
+
+    Заголовок — одна ячейка или две без ИНН («Март» и «2026»).
+    «ООО» и ИНН — член, даже если ячеек ровно две.
+    """
+    if not cells_text:
+        return current_month
+    inn, inn_index = _plan_inn(cells_text)
+    # Раньше здесь было cells_text.isdigit() у списка: строка из двух ячеек
+    # роняла загрузку всей папки.
+    if len(cells_text) == 1 or (len(cells_text) == 2 and not inn):
+        for text in cells_text:
+            if any(month in text.lower() for month in _PLAN_MONTHS):
+                return ensure_plan_month_year(text, file_name)
+        return current_month
+    if not inn:
+        return current_month
+    name = _name_from_plan_row_cells(cells_text, inn, inn_index)
+    # УМНАЯ СКЛЕЙКА ДЛЯ ОРГАНИЗАЦИЙ В НЕСКОЛЬКИХ СРО
+    if inn in database:
+        old = database[inn]["name"]
+        if _looks_like_address(old) and not _looks_like_address(name):
+            database[inn]["name"] = name
+        elif old[0].isdigit() and name and not name[0].isdigit():
+            database[inn]["name"] = name
+        plans = database[inn].setdefault("plans", {})
+        if sro_key not in plans:
+            plans[sro_key] = current_month
+            database[inn]["sro_type"] = ", ".join(sro_display_name(k) for k in plans)
+            database[inn]["month"] = ", ".join(plans.values())
+    else:
+        database[inn] = {
+            "name": name,
+            "plans": {sro_key: current_month},
+            "month": current_month,
+            "sro_type": sro_label,
+        }
+    return current_month
+
+
+def _load_plan_file(path: str, file_name: str, database: dict) -> None:
+    sro_key = plany_key_from_filename(file_name)
+    sro_label = sro_display_name(sro_key)
+    doc = Document(path)
+    current_month = "Не указан"
+    for table in doc.tables:
+        for row in table.rows:
+            try:
+                current_month = _apply_plan_row(
+                    database,
+                    _plan_row_cells(row),
+                    current_month,
+                    sro_key,
+                    sro_label,
+                    file_name,
+                )
+            except Exception as exc:
+                print(f"⚠️ Строка плана {file_name} пропущена: {exc}")
+
+
+def load_plany_folder(plany_path: str, database: dict | None = None) -> dict:
+    """Прочитать docx из папки plany. Битый файл или строка не останавливают остальные."""
+    if database is None:
+        database = {}
+    files = [name for name in os.listdir(plany_path) if name.endswith(".docx")]
+    for file_name in files:
+        full_path = os.path.join(plany_path, file_name)
+        try:
+            _load_plan_file(full_path, file_name, database)
+        except Exception as exc:
+            print(f"⚠️ План {file_name} пропущен: {exc}")
+    return database
+
+
 # Бот автоматически берет скрытый путь из файла secrets.py
 folder_path = SRO_FILES_DIR
 plany_path = os.path.join(folder_path, "plany")
@@ -506,71 +629,8 @@ plany_path = os.path.join(folder_path, "plany")
 print("⏳ Начинаю сканирование подпапки plany...")
 
 try:
-    months_keywords = ["январь", "февраль", "март", "апрель", "май", "июнь", 
-                       "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
-
-    files = [f for f in os.listdir(plany_path) if f.endswith('.docx')]
-    
-    for file_name in files:
-        full_path = os.path.join(plany_path, file_name)
-        sro_key = plany_key_from_filename(file_name)
-        sro_label = sro_display_name(sro_key)
-        doc = Document(full_path)
-        current_month = "Не указан"
-
-        for table in doc.tables:
-            for row in table.rows:
-                cells_text = []
-                for cell in row.cells:
-                    txt = cell.text.strip()
-                    if txt and txt not in cells_text:
-                        cells_text.append(txt)
-                
-                if len(cells_text) == 1 or (len(cells_text) == 2 and cells_text.isdigit()):
-                    for t in cells_text:
-                        if any(m in t.lower() for m in months_keywords):
-                            current_month = t
-                            break
-                    continue
-
-                if len(cells_text) >= 2:
-                    inn = ""
-                    inn_index = -1
-                    
-                    for idx, text in enumerate(cells_text):
-                        clean_text = text.replace(" ", "").replace("\xa0", "")
-                        if clean_text.isdigit() and (9 <= len(clean_text) <= 12):
-                            inn = clean_text
-                            inn_index = idx
-                            break
-                    
-                    if inn:
-                        name = _name_from_plan_row_cells(cells_text, inn, inn_index)
-
-                           # УМНАЯ СКЛЕЙКА ДЛЯ ОРГАНИЗАЦИЙ В НЕСКОЛЬКИХ СРО
-                        if inn in sro_database:
-                            old = sro_database[inn]["name"]
-                            if _looks_like_address(old) and not _looks_like_address(name):
-                                sro_database[inn]["name"] = name
-                            elif old[0].isdigit() and name and not name[0].isdigit():
-                                sro_database[inn]["name"] = name
-                            plans = sro_database[inn].setdefault("plans", {})
-                            if sro_key not in plans:
-                                plans[sro_key] = current_month
-                                sro_database[inn]["sro_type"] = ", ".join(
-                                    sro_display_name(k) for k in plans
-                                )
-                                sro_database[inn]["month"] = ", ".join(plans.values())
-                        else:
-                            sro_database[inn] = {
-                                "name": name,
-                                "plans": {sro_key: current_month},
-                                "month": current_month,
-                                "sro_type": sro_label,
-                            }
-                        
+    load_plany_folder(plany_path, sro_database)
     print(f"✅ ВСЕ БАЗЫ СИНХРОНИЗИРОВАНЫ! Всего в памяти: {len(sro_database)}")
-
 except Exception as e:
     print(f"❌ Ошибка при чтении папки plany: {e}")
 
@@ -1658,6 +1718,21 @@ def finish_feedback(chat_id: int, expected: str | None) -> None:
         )
 
 
+def _feedback_text_is_navigation(user_text: str) -> bool:
+    """Команда или кнопка меню: не записывать как ожидаемый ответ."""
+    text = (user_text or "").strip()
+    if not text:
+        return False
+    if text.startswith("/"):
+        return True
+    if resolve_navigation_command(text):
+        return True
+    if _is_reply_menu_button(text):
+        return True
+    labels = {label for _key, label, _cap in BLANKI_MENU_ITEMS}
+    return text in labels
+
+
 def _is_reply_menu_button(user_text: str) -> bool:
     """Текст reply-кнопки меню — не запрос НРС."""
     if user_text in (
@@ -2492,9 +2567,13 @@ def handle_text(message):
     if is_awaiting_expected(message.chat.id):
         if user_text.lower() in ("/skip", "skip", "пропустить"):
             finish_feedback(message.chat.id, None)
+            return
+        # Команда и кнопка меню — не «ожидаемый ответ».
+        if _feedback_text_is_navigation(user_text):
+            cancel_await_expected(message.chat.id)
         else:
             finish_feedback(message.chat.id, user_text)
-        return
+            return
 
     if is_info_list_quiz_active(message.chat.id):
         # «Назад» / команды меню — не ответы опроса
@@ -3511,7 +3590,7 @@ def handle_inline_search(call):
         bot.answer_callback_query(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.13.0"
+    BOT_VERSION = "1.13.2"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 

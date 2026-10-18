@@ -357,6 +357,39 @@ def init_db(path: Path | None = None) -> Path:
     return target
 
 
+def card_has_substance(card: dict) -> bool:
+    """Пустой {} и ответ без полей члена — не карточка.
+
+    Такую запись нельзя сохранять: save_member сначала стирает специалистов.
+    """
+    if not isinstance(card, dict) or not card:
+        return False
+    if _org_name(card):
+        return True
+    if str(card.get("inn") or "").strip():
+        return True
+    if str(card.get("ogrn") or "").strip():
+        return True
+    if str(card.get("director") or "").strip():
+        return True
+    if _status_title(card):
+        return True
+    for key in ("experts_by_category", "specialists_data"):
+        if isinstance(card.get(key), dict):
+            return True
+    return False
+
+
+def list_would_wipe_too_much(seen_count: int, stored_count: int) -> bool:
+    """Пустой список или меньше половины уже лежащих в базе членов.
+
+    Ровно половина ещё считается обычным обновлением.
+    """
+    if stored_count <= 0:
+        return False
+    return seen_count * 2 < stored_count
+
+
 def save_member(
     conn: sqlite3.Connection,
     target: SroTarget,
@@ -366,7 +399,12 @@ def save_member(
     run_id: str,
     updated_at: str,
 ) -> int:
-    """Перезаписать члена и его специалистов. Вернуть, сколько строк специалистов."""
+    """Перезаписать члена и его специалистов. Вернуть, сколько строк специалистов.
+
+    Пустая карточка не трогает ни члена, ни специалистов.
+    """
+    if not card_has_substance(card):
+        return 0
     member_id = int(list_row.get("id") or card.get("id"))
     org_name = _org_name(card) or _org_name(list_row)
     inn = str(card.get("inn") or list_row.get("inn") or "").strip()
@@ -493,7 +531,17 @@ def prune_members(
     target: SroTarget,
     seen_ids: set[int],
 ) -> int:
-    """Убрать членов СРО, которых больше нет среди действующих. Вернуть, сколько членов."""
+    """Убрать членов СРО, которых больше нет среди действующих. Вернуть, сколько членов.
+
+    Пустой набор и резкое падение числа не удаляют ничего: так битый ответ реестра
+    не стирает СРО. Решение «это сбой» принимает синк и пишет админам.
+    """
+    before = conn.execute(
+        "SELECT COUNT(*) FROM members WHERE registry=? AND sro_code=?",
+        (target.registry, target.code),
+    ).fetchone()[0]
+    if list_would_wipe_too_much(len(seen_ids), int(before)):
+        return 0
     conn.execute("DROP TABLE IF EXISTS seen_members")
     conn.execute("CREATE TEMP TABLE seen_members (id INTEGER PRIMARY KEY)")
     if seen_ids:
@@ -501,10 +549,6 @@ def prune_members(
             "INSERT INTO seen_members(id) VALUES (?)",
             [(int(mid),) for mid in seen_ids],
         )
-    before = conn.execute(
-        "SELECT COUNT(*) FROM members WHERE registry=? AND sro_code=?",
-        (target.registry, target.code),
-    ).fetchone()[0]
     conn.execute(
         """
         DELETE FROM specialists

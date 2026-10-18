@@ -14,29 +14,17 @@ import sys
 import threading
 import time
 import types as pytypes
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 os.environ.setdefault("BOT_PLATFORM", "max")
 
-# Сериализация апдейтов одного user_id (пул не ломает in-memory режимы).
-_dispatch_user_locks: dict[int, threading.Lock] = {}
-_dispatch_user_locks_guard = threading.Lock()
-
-
-def _dispatch_lock_for(user_id: int | None) -> threading.Lock:
-    if user_id is None:
-        return threading.Lock()
-    try:
-        uid = int(user_id)
-    except (TypeError, ValueError):
-        return threading.Lock()
-    with _dispatch_user_locks_guard:
-        lock = _dispatch_user_locks.get(uid)
-        if lock is None:
-            lock = threading.Lock()
-            _dispatch_user_locks[uid] = lock
-        return lock
+# Очередь на пользователя: один поток пула разбирает его апдейты по порядку.
+# Блокирующий lock на воркере занимал все потоки сообщениями одного человека.
+_user_update_queues: dict[int, deque] = {}
+_user_update_busy: set[int] = set()
+_user_update_guard = threading.Lock()
 
 # Облако Mail (O:\Рабочие) часто ломает Path.resolve() — WinError 1005.
 _orig_resolve = Path.resolve
@@ -121,6 +109,7 @@ from reestr_sync import (
     load_reestr_cache,
     membership_needs_detail_fetch,
     plany_key_from_filename,
+    ensure_plan_month_year,
 )
 from sro_about import (
     format_about_association,
@@ -461,23 +450,48 @@ def faq_link_atts(user_id: int, topic: str) -> list[dict] | None:
     return kb(row(link_button(label, url)), back_main_row())
 
 
+def _send_plain_fallback(user_id: int, text: str, attachments: list[dict] | None) -> None:
+    """400: сначала plain с теми же кнопками, затем без вложений.
+
+    Вложение тоже может быть причиной 400. Повтор с теми же attachments
+    тогда не доходит до пользователя.
+    """
+    assert api is not None
+    plain = html.unescape(re.sub(r"<[^>]+>", "", text or "")) or (text or "")
+    if text:
+        try:
+            api.send_message(
+                user_id=user_id,
+                text=plain,
+                attachments=attachments,
+                format=None,
+            )
+            return
+        except MaxApiError as exc:
+            if getattr(exc, "status", None) != 400 or not attachments:
+                logging.error("MAX send plain fallback failed", exc_info=True)
+                return
+    if not attachments:
+        return
+    try:
+        api.send_message(
+            user_id=user_id,
+            text=plain or text or " ",
+            attachments=None,
+            format=None,
+        )
+    except MaxApiError:
+        logging.error("MAX send without attachments failed", exc_info=True)
+
+
 def send(user_id: int, text: str, attachments: list[dict] | None = None) -> None:
     assert api is not None
     try:
         api.send_message(user_id=user_id, text=text, attachments=attachments)
     except MaxApiError as exc:
-        # Битый HTML → повтор без разметки (как safe_send_message в TG)
-        if getattr(exc, "status", None) == 400 and text:
-            plain = html.unescape(re.sub(r"<[^>]+>", "", text or ""))
-            try:
-                api.send_message(
-                    user_id=user_id,
-                    text=plain,
-                    attachments=attachments,
-                    format=None,
-                )
-            except MaxApiError:
-                logging.error("MAX send plain fallback failed", exc_info=True)
+        # Битый HTML или вложение → повтор без разметки.
+        if getattr(exc, "status", None) == 400 and (text or attachments):
+            _send_plain_fallback(user_id, text, attachments)
         else:
             raise
 
@@ -531,7 +545,7 @@ def load_plany() -> None:
                 if name and (not rec.get("name") or rec["name"] == inn):
                     rec["name"] = name
                 if sro_key and month:
-                    rec.setdefault("plans", {})[sro_key] = month
+                    rec.setdefault("plans", {})[sro_key] = ensure_plan_month_year(month, file_name)
                 rec["sro_type"] = ", ".join(rec.get("plans") or {sro_key: ""}.keys())
                 rec["month"] = ", ".join((rec.get("plans") or {}).values())
     print(f"✅ Планы в памяти: {len(sro_database)} организаций", flush=True)
@@ -720,7 +734,7 @@ def context_ready_text(user_id: int) -> str:
 
 MAX_START_HINTS = frozenset({
     "привет", "здравствуйте", "добрый день", "добрый вечер", "доброе утро",
-    "hi", "hello", "hey", "start", "старт", "начать", "меню", "help", "?",
+    "hi", "hello", "hey", "start", "старт", "начать", "?",
 })
 
 
@@ -1245,6 +1259,53 @@ def setup_commands() -> None:
         print(f"⚠️ Команды MAX не обновлены: {exc}", flush=True)
 
 
+def _update_is_heavy(update: dict) -> bool:
+    try:
+        if (update.get("update_type") or "") != "message_created":
+            return False
+        atts = attachments_from_update(update)
+        return any(isinstance(a, dict) for a in atts)
+    except Exception:
+        return False
+
+
+def _run_dispatched_update(update: dict) -> None:
+    try:
+        dispatch(update)
+    except Exception:
+        logging.error("dispatch failed", exc_info=True)
+        print("⚠️ Ошибка обработки апдейта, см. bot_max_errors.log", flush=True)
+
+
+def enqueue_user_update(update: dict, *, light_pool, heavy_pool) -> None:
+    """Поставить апдейт в очередь пользователя. В пуле занят один поток, не N."""
+    try:
+        uid, _chat = dest_from_update(update)
+        uid = int(uid) if uid is not None else 0
+    except Exception:
+        logging.error("dest_from_update failed", exc_info=True)
+        return
+    with _user_update_guard:
+        queue = _user_update_queues.setdefault(uid, deque())
+        queue.append(update)
+        if uid in _user_update_busy:
+            return
+        _user_update_busy.add(uid)
+    pool = heavy_pool if _update_is_heavy(update) else light_pool
+    pool.submit(_drain_user_queue, uid)
+
+
+def _drain_user_queue(uid: int) -> None:
+    while True:
+        with _user_update_guard:
+            queue = _user_update_queues.get(uid)
+            if not queue:
+                _user_update_busy.discard(uid)
+                return
+            update = queue.popleft()
+        _run_dispatched_update(update)
+
+
 def main() -> None:
     global api, reestr_database
     token = _token()
@@ -1293,29 +1354,6 @@ def main() -> None:
     light_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="max-light")
     heavy_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="max-heavy")
 
-    def _update_is_heavy(upd: dict) -> bool:
-        try:
-            if (upd.get("update_type") or "") != "message_created":
-                return False
-            atts = attachments_from_update(upd)
-            return any(isinstance(a, dict) for a in atts)
-        except Exception:
-            return False
-
-    def _safe_dispatch(upd: dict) -> None:
-        try:
-            uid, _ = dest_from_update(upd)
-        except Exception:
-            logging.error("dest_from_update failed", exc_info=True)
-            return
-        lock = _dispatch_lock_for(uid)
-        with lock:
-            try:
-                dispatch(upd)
-            except Exception:
-                logging.error("dispatch failed", exc_info=True)
-                print("⚠️ Ошибка обработки апдейта, см. bot_max_errors.log", flush=True)
-
     marker = None
     while True:
         try:
@@ -1324,8 +1362,7 @@ def main() -> None:
             if page.get("marker") is not None:
                 marker = page["marker"]
             for upd in updates:
-                pool = heavy_pool if _update_is_heavy(upd) else light_pool
-                pool.submit(_safe_dispatch, upd)
+                enqueue_user_update(upd, light_pool=light_pool, heavy_pool=heavy_pool)
         except KeyboardInterrupt:
             print("Остановлен.", flush=True)
             light_pool.shutdown(wait=False, cancel_futures=True)

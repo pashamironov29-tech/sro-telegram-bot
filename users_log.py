@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from datetime import datetime, timezone
+from html import escape as html_escape
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -17,19 +19,29 @@ USERS_FILE = ROOT / "bot_users.json"
 _lock = threading.Lock()
 
 
+def _html(text: str) -> str:
+    return html_escape(str(text or ""), quote=False)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _load() -> dict:
+def _load() -> dict | None:
+    """Журнал или None, если файл есть, но не разбирается.
+
+    None нельзя подменять пустым словарём: следующая запись стёрла бы историю.
+    """
     if not USERS_FILE.is_file():
         return {"users": {}}
     try:
         data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
     except Exception:
-        return {"users": {}}
+        print("bot_users.json не читается, журнал не затираю", flush=True)
+        return None
     if not isinstance(data, dict):
-        return {"users": {}}
+        print("bot_users.json не читается, журнал не затираю", flush=True)
+        return None
     users = data.get("users")
     if not isinstance(users, dict):
         data["users"] = {}
@@ -37,10 +49,10 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    USERS_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    tmp = USERS_FILE.with_name(USERS_FILE.name + ".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, USERS_FILE)
 
 
 def _user_from_message(message) -> dict:
@@ -73,6 +85,8 @@ def touch_user(message, *, event: str = "message") -> bool:
     is_new = False
     with _lock:
         data = _load()
+        if data is None:
+            return False
         users = data.setdefault("users", {})
         row = users.get(key)
         if not row:
@@ -102,12 +116,16 @@ def touch_user(message, *, event: str = "message") -> bool:
 
 def users_count() -> int:
     with _lock:
-        return len(_load().get("users") or {})
+        data = _load()
+        if not data:
+            return 0
+        return len(data.get("users") or {})
 
 
 def list_users(*, limit: int = 50) -> list[dict]:
     with _lock:
-        users = list((_load().get("users") or {}).values())
+        data = _load()
+        users = list((data.get("users") or {}).values()) if data else []
     users.sort(key=lambda u: u.get("last_seen") or "", reverse=True)
     return users[:limit]
 
@@ -125,9 +143,9 @@ def format_users_report(*, limit: int = 30) -> str:
         return "\n".join(lines)
     for i, u in enumerate(rows, 1):
         uname = u.get("username") or ""
-        mention = f"@{uname}" if uname else "без @username"
+        mention = f"@{_html(uname)}" if uname else "без @username"
         lines.append(
-            f"{i}. <b>{u.get('full_name') or '—'}</b> ({mention})\n"
+            f"{i}. <b>{_html(u.get('full_name') or '—')}</b> ({mention})\n"
             f"   id <code>{u.get('chat_id')}</code> · "
             f"первый {u.get('first_seen', '—')} · "
             f"был {u.get('last_seen', '—')} · "

@@ -2,6 +2,7 @@
 
 import re
 from difflib import SequenceMatcher
+from html import escape as html_escape
 
 from bot_disclaimers import OFFICIAL_SOURCE_DISCLAIMER
 from sro_profiles import ACTIVITY_LABEL, activity_allows_scopes
@@ -719,7 +720,7 @@ def resolve_voprosy_site_topic_button(button: str) -> str | None:
 
 
 def _normalize(text: str) -> str:
-    text = text.lower().replace("ё", "e")
+    text = text.lower().replace("ё", "е")
     return re.sub(r"\s+", " ", text.strip())
 
 
@@ -809,10 +810,11 @@ def format_scope_mismatch_response(question: str, user_activity: str, blocked_it
         "izysk": "изыскателей",
     }.get(need, "другого типа СРО")
     user_label = ACTIVITY_LABEL.get(user_activity, user_activity)
+    safe_question = html_escape(question, quote=False)
     return {
         "ok": True,
         "text": (
-            f"🤖 По вопросу «<b>{question}</b>»:\n\n"
+            f"🤖 По вопросу «<b>{safe_question}</b>»:\n\n"
             f"⚠️ Сейчас контекст: <b>{user_label}</b>. "
             f"Этот вопрос относится к СРО <b>{hint}</b>.\n\n"
             "Введите <b>ИНН</b> организации в нужном СРО или нажмите кнопку "
@@ -840,10 +842,11 @@ def format_voprosy_faq_response(question: str, item: dict, profile: dict | None 
     ctx_line = ""
     if profile:
         ctx_line = f"<i>(контекст: {profile.get('short_title', profile.get('name', ''))})</i>\n\n"
+    safe_question = html_escape(question, quote=False)
     return {
         "ok": True,
         "text": (
-            f"🤖 По вашему вопросу «<b>{question}</b>»:\n\n"
+            f"🤖 По вашему вопросу «<b>{safe_question}</b>»:\n\n"
             f"{ctx_line}"
             f"💡 <b>Кратко:</b> {short}\n\n"
             "📄 <b>Полный ответ</b> с правовым обоснованием — на официальном сайте, "

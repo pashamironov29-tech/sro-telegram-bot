@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from html import escape as html_escape
 
 try:
     from contacts_data import CONTACTS, CONTACT_BUTTONS
@@ -352,7 +353,7 @@ def search_directory_persons(query: str, *, limit: int = 5) -> list[dict]:
 def format_directory_search_results(query: str, results: list[dict]) -> str:
     if not results:
         return (
-            f"🔍 По запросу «<b>{query}</b>» в телефонном справочнике никого не найдено.\n\n"
+            f"🔍 По запросу «<b>{html_escape(query, quote=False)}</b>» в телефонном справочнике никого не найдено.\n\n"
             "Попробуйте: «Глебов», «Глебова», «телефон Сизовой» или «Фамилия И.О.»\n"
             "Либо откройте «📞 Контакты отделов» и выберите отдел."
         )
@@ -368,7 +369,7 @@ def format_directory_search_results(query: str, results: list[dict]) -> str:
 
     lines = [
         f"📇 <b>Справочник СРО</b> — найдено: {len(results)}",
-        f"<i>Запрос: {query}</i>\n",
+        f"<i>Запрос: {html_escape(query, quote=False)}</i>\n",
     ]
     for item in results:
         dept = item["department"]
