@@ -16,6 +16,9 @@ vps/gc_cred*
 
 # === Данные бота / ПДн / кэши ===
 bot_users.json
+bot_users.json.lock
+bot_users.json.*.tmp
+bot_users.json.bad-*
 user_sro_context.json
 contacts_access.json
 feedback_questions.jsonl

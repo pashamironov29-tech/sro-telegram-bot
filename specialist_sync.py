@@ -13,7 +13,11 @@
 по countPages: если страницы оборвались раньше, список считаем битым и
 старых членов не удаляем. Пустой список и список меньше половины уже
 записанных членов тоже не удаляет строки: в лог и админам уходит
-предупреждение. Сортировка по id реестр молча игнорирует, страницы
+предупреждение. Для выбранных СРО порог снимает ``--allow-prune CODE``
+(можно несколько раз) или ``SPECIALIST_ALLOW_PRUNE=CODE1,CODE2``.
+Пустой список при этом всё равно не стирает базу, если в ответе явная
+ошибка или нет count. Пустой список, когда членов этой СРО в базе нет,
+ошибкой не считается. Сортировка по id реестр молча игнорирует, страницы
 тогда повторяются и часть членов пропадает. Сортировка по ИНН применяется
 и даёт полный список без повторов.
 
@@ -28,6 +32,7 @@
     python specialist_sync.py
     python specialist_sync.py --sro OGPS
     python specialist_sync.py --fresh
+    python specialist_sync.py --allow-prune OGPS
 
 База: specialists.sqlite рядом со скриптом (или SPECIALISTS_DB / --db).
 На сервер это не выкладывает и ботов не останавливает.
@@ -49,6 +54,7 @@ from specialist_reestr import (
     card_has_substance,
     connect,
     ensure_schema,
+    allow_prune_codes,
     init_db,
     list_stamp,
     list_would_wipe_too_much,
@@ -183,6 +189,20 @@ def _expert_mark(row: dict) -> bool:
 class MemberList:
     rows: list[dict]
     api_count: int | None
+    explicit_error: bool = False
+
+
+def _response_has_explicit_error(payload: dict, data: dict) -> bool:
+    """Поле error в ответе списка: такой пустой набор нельзя считать правдой."""
+    for obj in (payload, data):
+        if isinstance(obj, dict) and obj.get("error"):
+            return True
+    return False
+
+
+def _empty_list_may_prune(fetched: MemberList) -> bool:
+    """Пустой список стирает базу только при явном count и без ошибки в ответе."""
+    return fetched.api_count is not None and not fetched.explicit_error
 
 
 def fetch_member_rows(client: RegistryClient, target: SroTarget) -> MemberList:
@@ -192,6 +212,7 @@ def fetch_member_rows(client: RegistryClient, target: SroTarget) -> MemberList:
     page = 1
     total_pages = 1
     api_count: int | None = None
+    explicit_error = False
     empty_hits = 0
     while page <= 10000:
         payload = client.post(
@@ -213,6 +234,7 @@ def fetch_member_rows(client: RegistryClient, target: SroTarget) -> MemberList:
             api_count = _as_int(data.get("count"))
             parsed_pages = _as_int(data.get("countPages"))
             total_pages = max(1, parsed_pages or 1)
+            explicit_error = _response_has_explicit_error(payload, data)
         added = 0
         for item in chunk:
             if not isinstance(item, dict) or not item.get("id"):
@@ -248,7 +270,7 @@ def fetch_member_rows(client: RegistryClient, target: SroTarget) -> MemberList:
         raise SyncRequestError(
             f"{target.code}: список оборвался на странице {page} из {total_pages}"
         )
-    return MemberList(rows=rows, api_count=api_count)
+    return MemberList(rows=rows, api_count=api_count, explicit_error=explicit_error)
 
 
 @dataclass
@@ -366,6 +388,7 @@ def sync_sro(
     *,
     run_id: str,
     resume: bool,
+    allow_prune: bool = False,
 ) -> SroStats:
     stats = SroStats(code=target.code)
     try:
@@ -388,10 +411,26 @@ def sync_sro(
         flush=True,
     )
     if not rows:
-        _reject_member_list(
-            stats,
-            f"{target.code}: реестр вернул пустой список членов, "
-            "старых записей не удаляю",
+        stored_before = _stored_members(conn, target)
+        if stored_before == 0:
+            print(
+                f"{target.code}: реестр вернул пустой список, в базе членов нет",
+                flush=True,
+            )
+            return stats
+        if not (allow_prune and _empty_list_may_prune(fetched)):
+            _reject_member_list(
+                stats,
+                f"{target.code}: реестр вернул пустой список членов, "
+                "старых записей не удаляю",
+            )
+            return stats
+        stats.removed = prune_members(conn, target, set(), allow_prune=True)
+        conn.commit()
+        print(
+            f"{target.code}: пустой список с count={fetched.api_count}, "
+            f"убрано членов {stats.removed}",
+            flush=True,
         )
         return stats
     stored_before = _stored_members(conn, target)
@@ -456,7 +495,7 @@ def sync_sro(
                 f"карточек {stats.fetched}, пропуск {stats.skipped}, ошибок {stats.errors}",
                 flush=True,
             )
-    if list_would_wipe_too_much(len(seen), stored_before):
+    if list_would_wipe_too_much(len(seen), stored_before) and not allow_prune:
         stats.removed = 0
         _reject_member_list(
             stats,
@@ -464,7 +503,7 @@ def sync_sro(
             "Меньше половины — старых записей не удаляю",
         )
     else:
-        stats.removed = prune_members(conn, target, seen)
+        stats.removed = prune_members(conn, target, seen, allow_prune=allow_prune)
     conn.commit()
     print(
         f"{target.code}: готово, специалистов за этот проход {stats.specialists}, "
@@ -512,10 +551,12 @@ def sync_all(
     codes: list[str] | None = None,
     fresh: bool = False,
     client: RegistryClient | None = None,
+    allow_prune: list[str] | None = None,
 ) -> int:
     path = init_db(db_path)
     client = client or RegistryClient()
     targets = partner_targets(codes)
+    allowed = allow_prune_codes(allow_prune)
     conn = connect(path, write=True)
     try:
         run_id, resume = resolve_run(conn, fresh=fresh)
@@ -523,7 +564,14 @@ def sync_all(
         failed: list[str] = []
         try:
             for target in targets:
-                stats = sync_sro(conn, client, target, run_id=run_id, resume=resume)
+                stats = sync_sro(
+                    conn,
+                    client,
+                    target,
+                    run_id=run_id,
+                    resume=resume,
+                    allow_prune=target.code.upper() in allowed,
+                )
                 if (
                     stats.list_failed
                     or stats.list_rejected
@@ -559,12 +607,22 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="не продолжать оборванный запуск, начать новый",
     )
+    parser.add_argument(
+        "--allow-prune",
+        action="append",
+        default=None,
+        metavar="CODE",
+        help=(
+            "удалять членов этой СРО, даже если в списке меньше половины базы. "
+            "Можно несколько раз. То же: SPECIALIST_ALLOW_PRUNE=CODE1,CODE2"
+        ),
+    )
     args = parser.parse_args(argv)
     from specialist_reestr import set_db_path
 
     if args.db:
         set_db_path(args.db)
-    return sync_all(codes=args.sro, fresh=args.fresh)
+    return sync_all(codes=args.sro, fresh=args.fresh, allow_prune=args.allow_prune)
 
 
 if __name__ == "__main__":

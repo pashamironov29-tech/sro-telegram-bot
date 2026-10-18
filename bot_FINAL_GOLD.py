@@ -3590,7 +3590,7 @@ def handle_inline_search(call):
         bot.answer_callback_query(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.13.2"
+    BOT_VERSION = "1.13.3"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 

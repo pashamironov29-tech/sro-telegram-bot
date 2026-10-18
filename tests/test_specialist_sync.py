@@ -705,6 +705,169 @@ def test_empty_card_does_not_wipe_specialists(tmp_path):
     assert search_people("сидоров", db=db).status == "ok"
 
 
+def _member_ids(db):
+    conn = connect(db)
+    try:
+        rows = conn.execute(
+            "SELECT member_id FROM members ORDER BY member_id"
+        ).fetchall()
+        return [int(row[0]) for row in rows]
+    finally:
+        conn.close()
+
+
+def _run_main(monkeypatch, db, api, argv):
+    """CLI specialist_sync.main с подставленным transport, без сети и пауз."""
+    import specialist_sync
+
+    original = specialist_sync.RegistryClient
+
+    def factory(*_args, **_kwargs):
+        return original(api, min_interval=0, sleep=lambda _s: None, retries=1)
+
+    monkeypatch.setattr(specialist_sync, "RegistryClient", factory)
+    return specialist_sync.main(
+        ["--db", str(db), "--sro", "OGPS", "--fresh", *argv]
+    )
+
+
+def test_allow_prune_flag_removes_members_below_half(tmp_path, monkeypatch):
+    """--allow-prune снимает порог <50%. Без флага тот же список по-прежнему блокируется."""
+    import specialist_sync
+
+    alerts: list[str] = []
+    monkeypatch.setattr(specialist_sync, "notify_admins", alerts.append, raising=False)
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_ListApi([1, 2, 3, 4])),
+    ) == 0
+    assert _member_ids(db) == [1, 2, 3, 4]
+
+    alerts.clear()
+    assert _run_main(monkeypatch, db, _ListApi([1]), []) == 1
+    assert _member_ids(db) == [1, 2, 3, 4]
+    assert alerts
+    assert "OGPS" in alerts[0]
+
+    alerts.clear()
+    assert _run_main(
+        monkeypatch,
+        db,
+        _ListApi([1]),
+        ["--allow-prune", "OGPP", "--allow-prune", "ogps"],
+    ) == 0
+    assert _member_ids(db) == [1]
+    assert alerts == []
+    assert search_people("сидоров", db=db).status == "ok"
+    assert search_people("иванова", db=db).status != "ok"
+
+
+def test_allow_prune_env_removes_members_below_half(tmp_path, monkeypatch):
+    import specialist_sync
+
+    alerts: list[str] = []
+    monkeypatch.setattr(specialist_sync, "notify_admins", alerts.append, raising=False)
+    monkeypatch.setenv("SPECIALIST_ALLOW_PRUNE", "OGPP, ogps")
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_ListApi([1, 2, 3, 4])),
+    ) == 0
+    assert _run_main(monkeypatch, db, _ListApi([1]), []) == 0
+    assert _member_ids(db) == [1]
+    assert alerts == []
+
+
+def test_allow_prune_does_not_wipe_empty_list_without_count(tmp_path, monkeypatch):
+    """Пустой список без count или с явной ошибкой не стирает базу даже с --allow-prune."""
+    import specialist_sync
+
+    alerts: list[str] = []
+    monkeypatch.setattr(specialist_sync, "notify_admins", alerts.append, raising=False)
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_ListApi([1, 2, 3, 4])),
+    ) == 0
+
+    alerts.clear()
+    assert _run_main(
+        monkeypatch, db, _ListApi([], omit_count=True), ["--allow-prune", "OGPS"]
+    ) == 1
+    assert _member_ids(db) == [1, 2, 3, 4]
+    assert alerts
+
+    alerts.clear()
+
+    def error_list(url, body, timeout):
+        if url.endswith("/member/list"):
+            return 200, {
+                "success": True,
+                "error": "registry down",
+                "data": {"count": 0, "countPages": 1, "data": []},
+            }
+        raise AssertionError(url)
+
+    assert _run_main(
+        monkeypatch, db, error_list, ["--allow-prune", "OGPS"]
+    ) == 1
+    assert _member_ids(db) == [1, 2, 3, 4]
+    assert alerts
+
+
+def test_allow_prune_trustworthy_empty_list_removes_members(tmp_path, monkeypatch):
+    """Явный count 0 и --allow-prune снимают членов. Без count выше — нет."""
+    import specialist_sync
+
+    alerts: list[str] = []
+    monkeypatch.setattr(specialist_sync, "notify_admins", alerts.append, raising=False)
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_ListApi([1, 2])),
+    ) == 0
+    assert _run_main(
+        monkeypatch, db, _ListApi([], count=0), ["--allow-prune", "OGPS"]
+    ) == 0
+    assert _member_ids(db) == []
+    assert alerts == []
+
+
+def test_empty_list_on_empty_database_is_not_an_alert(tmp_path, monkeypatch):
+    """Пустой список, когда членов этой СРО в базе нет, — не авария и код 0."""
+    import specialist_sync
+
+    alerts: list[str] = []
+    monkeypatch.setattr(specialist_sync, "notify_admins", alerts.append, raising=False)
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_ListApi([], count=0)),
+    ) == 0
+    assert alerts == []
+    assert _member_ids(db) == []
+
+    alerts.clear()
+    assert sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_ListApi([], omit_count=True)),
+    ) == 0
+    assert alerts == []
+
+
 def test_timeout_is_retried():
     state = {"n": 0}
 
