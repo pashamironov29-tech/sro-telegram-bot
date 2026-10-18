@@ -12,3 +12,6 @@ ExecStart=/bin/bash /opt/sro-bot/vps/specialist_daily_sync.sh
 Nice=10
 # Первый проход ~8 тысяч карточек, дальше короче
 TimeoutStartSec=6h
+# SPECIALIST_ALLOW_PRUNE сюда насовсем не класть: ночной синк тогда
+# будет удалять членов при каждом коротком списке.
+# Разовое удаление: python specialist_sync.py --allow-prune CODE

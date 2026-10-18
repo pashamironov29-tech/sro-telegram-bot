@@ -130,6 +130,57 @@ def test_corrupt_journal_is_moved_once_and_rewritten(tmp_path, monkeypatch, caps
     assert "Новый" not in logged
 
 
+def test_oserror_on_read_does_not_quarantine(tmp_path, monkeypatch, capsys):
+    """Нет прав на чтение — файл остаётся, запись пропускается, в логе нет имени."""
+    path = tmp_path / "bot_users.json"
+    monkeypatch.setattr(users_log, "USERS_FILE", path)
+    payload = json.dumps(
+        {"users": {"5": {"chat_id": 5, "full_name": "Живой", "username": "ok"}}},
+        ensure_ascii=False,
+    )
+    path.write_text(payload, encoding="utf-8")
+    before = path.read_bytes()
+    real_read_text = Path.read_text
+
+    def boom(self, *args, **kwargs):
+        if Path(self) == path:
+            raise PermissionError("Секретноеимя")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", boom)
+    assert touch_user(_message(9, first_name="Новый")) is False
+    assert list(tmp_path.glob("bot_users.json.bad-*")) == []
+    assert path.read_bytes() == before
+    logged = capsys.readouterr().out
+    assert "пропускаю" in logged
+    assert "Секретноеимя" not in logged
+    assert "Живой" not in logged
+    assert "Новый" not in logged
+
+
+def test_tmp_name_is_not_the_shared_one(tmp_path, monkeypatch):
+    """Общий bot_users.json.tmp ловится и при включённом flock: имя другое на каждую запись."""
+    path = tmp_path / "bot_users.json"
+    monkeypatch.setattr(users_log, "USERS_FILE", path)
+    seen: list[str] = []
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen.append(Path(src).name)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy)
+    assert touch_user(_message(1)) is True
+    assert touch_user(_message(2)) is True
+    assert len(seen) == 2
+    assert seen[0] != seen[1]
+    for name in seen:
+        assert name != "bot_users.json.tmp"
+        assert name.startswith("bot_users.json.")
+        assert name.endswith(".tmp")
+        assert str(os.getpid()) in name
+
+
 def test_without_fcntl_journal_still_writes(monkeypatch):
     monkeypatch.setattr(users_log, "fcntl", None, raising=False)
     assert touch_user(_message(15)) is True

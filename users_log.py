@@ -4,8 +4,9 @@
 Список смотри: файл bot_users.json или команда /users (только админ).
 
 Telegram и MAX — два процесса в одном каталоге. threading.Lock их не
-разводит, поэтому запись идёт через свой tmp и lock-файл. Сбой журнала
-не должен обрывать ответ пользователю.
+разводит, поэтому запись идёт через свой tmp и lock-файл. На Windows
+fcntl нет: два бота сразу делят журнал без межпроцессной блокировки.
+Сбой журнала не должен обрывать ответ пользователю.
 """
 
 from __future__ import annotations
@@ -99,15 +100,26 @@ def _quarantine_corrupt() -> bool:
 
 
 def _load() -> dict | None:
-    """Журнал или None, если битый файл не удалось убрать в сторону.
+    """Журнал или None, если писать поверх файла нельзя.
 
-    None нельзя подменять пустым словарём: следующая запись стёрла бы историю.
+    None — битый файл не удалось убрать или чтение сорвалось (нет прав, диск).
+    Пустым словарём это не подменяем: следующая запись стёрла бы историю.
     """
     if not USERS_FILE.is_file():
         return {"users": {}}
     try:
-        data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
-    except Exception:
+        raw = USERS_FILE.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        if not _quarantine_corrupt():
+            return None
+        return {"users": {}}
+    except OSError:
+        # Нет прав или диск: файл не битый, в .bad не уносим и поверх не пишем.
+        _log("users_log: журнал не прочитался, запись пропускаю")
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
         if not _quarantine_corrupt():
             return None
         return {"users": {}}

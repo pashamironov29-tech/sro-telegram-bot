@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 import requests
 
@@ -842,30 +844,43 @@ def test_allow_prune_trustworthy_empty_list_removes_members(tmp_path, monkeypatc
     assert alerts == []
 
 
-def test_empty_list_on_empty_database_is_not_an_alert(tmp_path, monkeypatch):
-    """Пустой список, когда членов этой СРО в базе нет, — не авария и код 0."""
+def _empty_db_warnings(caplog):
+    return [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "OGPS" in record.getMessage() and "пуст" in record.getMessage()
+    ]
+
+
+def test_empty_list_on_empty_database_is_not_an_alert(tmp_path, monkeypatch, caplog):
+    """Пустой список при пустой базе — не авария и код 0, но warning в логе."""
     import specialist_sync
 
     alerts: list[str] = []
     monkeypatch.setattr(specialist_sync, "notify_admins", alerts.append, raising=False)
     db = tmp_path / "spec.sqlite"
-    assert sync_all(
-        db_path=db,
-        codes=["OGPS"],
-        fresh=True,
-        client=_client(_ListApi([], count=0)),
-    ) == 0
+    with caplog.at_level(logging.WARNING, logger="specialist_sync"):
+        assert sync_all(
+            db_path=db,
+            codes=["OGPS"],
+            fresh=True,
+            client=_client(_ListApi([], count=0)),
+        ) == 0
     assert alerts == []
     assert _member_ids(db) == []
+    assert _empty_db_warnings(caplog)
 
     alerts.clear()
-    assert sync_all(
-        db_path=db,
-        codes=["OGPS"],
-        fresh=True,
-        client=_client(_ListApi([], omit_count=True)),
-    ) == 0
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="specialist_sync"):
+        assert sync_all(
+            db_path=db,
+            codes=["OGPS"],
+            fresh=True,
+            client=_client(_ListApi([], omit_count=True)),
+        ) == 0
     assert alerts == []
+    assert _empty_db_warnings(caplog)
 
 
 def test_timeout_is_retried():

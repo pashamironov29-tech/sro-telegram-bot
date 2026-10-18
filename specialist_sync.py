@@ -17,8 +17,11 @@
 (можно несколько раз) или ``SPECIALIST_ALLOW_PRUNE=CODE1,CODE2``.
 Пустой список при этом всё равно не стирает базу, если в ответе явная
 ошибка или нет count. Пустой список, когда членов этой СРО в базе нет,
-ошибкой не считается. Сортировка по id реестр молча игнорирует, страницы
-тогда повторяются и часть членов пропадает. Сортировка по ИНН применяется
+ошибкой не считается: админам не шлём и код 0, но в лог пишется warning.
+``SPECIALIST_ALLOW_PRUNE`` в unit-файл насовсем не класть — для разового
+удаления запускай ``--allow-prune CODE``. Сортировка по id реестр молча
+игнорирует, страницы тогда повторяются и часть членов пропадает.
+Сортировка по ИНН применяется
 и даёт полный список без повторов.
 
 НОСТРОЙ в списке отдаёт даты обновления — карточку с тем же отпечатком
@@ -42,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import logging
 import sys
 import time
 from dataclasses import dataclass
@@ -413,9 +417,10 @@ def sync_sro(
     if not rows:
         stored_before = _stored_members(conn, target)
         if stored_before == 0:
-            print(
-                f"{target.code}: реестр вернул пустой список, в базе членов нет",
-                flush=True,
+            logging.getLogger(__name__).warning(
+                "%s: реестр вернул пустой список, в базе членов нет. "
+                "Если СРО не пустая, реестр сломан",
+                target.code,
             )
             return stats
         if not (allow_prune and _empty_list_may_prune(fetched)):
@@ -614,7 +619,8 @@ def main(argv: list[str] | None = None) -> int:
         metavar="CODE",
         help=(
             "удалять членов этой СРО, даже если в списке меньше половины базы. "
-            "Можно несколько раз. То же: SPECIALIST_ALLOW_PRUNE=CODE1,CODE2"
+            "Можно несколько раз, разовый запуск. "
+            "SPECIALIST_ALLOW_PRUNE в unit-файл насовсем не класть"
         ),
     )
     args = parser.parse_args(argv)
