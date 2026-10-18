@@ -2,6 +2,7 @@
 
 import re
 from difflib import SequenceMatcher
+from html import escape as html_escape
 
 from bot_disclaimers import OFFICIAL_SOURCE_DISCLAIMER
 
@@ -126,7 +127,7 @@ SRO_SITE_QA_ITEMS = [
 
 
 def _normalize(text: str) -> str:
-    text = text.lower().replace("ё", "e")
+    text = text.lower().replace("ё", "е")
     return re.sub(r"\s+", " ", text.strip())
 
 
@@ -239,7 +240,7 @@ def format_sro_site_qa_response(question: str, item: dict) -> dict:
     return {
         "ok": True,
         "text": (
-            f"🤖 По вашему вопросу «<b>{question}</b>»:\n\n"
+            f"🤖 По вашему вопросу «<b>{html_escape(question, quote=False)}</b>»:\n\n"
             f"💡 <b>Кратко:</b> {item['short']}\n\n"
             f"📄 <b>На сайте:</b>\n{links_block}\n\n"
             f"{OFFICIAL_SOURCE_DISCLAIMER}"

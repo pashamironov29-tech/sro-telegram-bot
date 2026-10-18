@@ -1,6 +1,7 @@
 """Партнёры и национальные объединения СРО «ГЕН» — сайты и поиск по запросу."""
 
 import re
+from html import escape as html_escape
 
 from bot_disclaimers import OFFICIAL_SOURCE_DISCLAIMER
 
@@ -61,7 +62,7 @@ GENERAL_PARTNER_PHRASES = (
 
 
 def _normalize(text: str) -> str:
-    text = text.lower().replace("ё", "e")
+    text = text.lower().replace("ё", "е")
     return re.sub(r"\s+", " ", text.strip())
 
 
@@ -185,7 +186,7 @@ def format_partner_response(question: str, match: dict) -> dict:
         return {
             "ok": True,
             "text": (
-                f"🤖 По вашему вопросу «<b>{question}</b>»:\n\n"
+                f"🤖 По вашему вопросу «<b>{html_escape(question, quote=False)}</b>»:\n\n"
                 f"{get_partners_full_text()}"
             ),
         }
@@ -201,7 +202,7 @@ def format_partner_response(question: str, match: dict) -> dict:
     return {
         "ok": True,
         "text": (
-            f"🤖 По вашему вопросу «<b>{question}</b>»:\n\n"
+            f"🤖 По вашему вопросу «<b>{html_escape(question, quote=False)}</b>»:\n\n"
             f"💡 <b>Кратко:</b> <b>{item['name']}</b> — партнёр Ассоциации, "
             f"сайт: {_web_link(item['url'])}{extra}\n\n"
             f"📄 Полный список партнёров и НО:\n"
