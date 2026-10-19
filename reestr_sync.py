@@ -406,10 +406,16 @@ def _prefer_membership(current: dict | None, new: dict) -> dict:
     ):
         if key not in new and key in current:
             merged[key] = current[key]
-    # Входящая запись свежее кэша: «Член СРО» после исключения не затираем старым статусом.
+    # Список часто ещё «Член СРО», а исключение есть только в мерах карточки.
+    # Карточку повторно не качаем, поэтому смотрим последнюю меру из кэша.
     new_status = (new.get("status") or "").strip()
+    cur_status = (current.get("status") or "").strip()
     if new_status:
         merged["status"] = new_status
+    if new_status == "Член СРО" and cur_status == "Исключен":
+        from_card = _status_from_disciplinary(merged.get("disciplinary_measures") or [])
+        if from_card == "Исключен":
+            merged["status"] = "Исключен"
     if current.get("duplicated") or new.get("duplicated"):
         merged["duplicated"] = True
     return merged

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import types
 from concurrent.futures import ThreadPoolExecutor
@@ -299,6 +300,26 @@ def test_fresh_member_status_beats_old_exclusion():
     latest = [{"date": "01.06.2024", "measure": "Исключение из членов СРО"}]
     assert reestr_sync._status_from_disciplinary(latest) == "Исключен"
 
+    kept = reestr_sync._prefer_membership(
+        {
+            "status": "Исключен",
+            "sro_id": "OGPS",
+            "disciplinary_measures": latest,
+        },
+        {"status": "Член СРО", "sro_id": "OGPS"},
+    )
+    assert kept["status"] == "Исключен"
+
+    reinstated = reestr_sync._prefer_membership(
+        {
+            "status": "Исключен",
+            "sro_id": "OGPS",
+            "disciplinary_measures": history,
+        },
+        {"status": "Член СРО", "sro_id": "OGPS"},
+    )
+    assert reinstated["status"] == "Член СРО"
+
 
 def test_checko_quota_counts_only_success(tmp_path, monkeypatch):
     monkeypatch.setattr(checko_client, "_data_dir", lambda: tmp_path)
@@ -328,6 +349,55 @@ def test_checko_quota_counts_only_success(tmp_path, monkeypatch):
     assert err is None
     assert body["data"]["name"] == "ООО"
     assert checko_client.requests_used_today() == 1
+
+
+def test_checko_parallel_reserve_stays_within_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(checko_client, "_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(checko_client, "_api_key", lambda: "test-fake-checko-key")
+    monkeypatch.setattr(checko_client, "DAILY_LIMIT", 1)
+    entered: list[str] = []
+    release = threading.Event()
+    results: list[tuple] = []
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"data": {"ok": True}}
+
+        def raise_for_status(self):
+            return None
+
+    def post(_url, json=None, timeout=None):
+        entered.append((json or {}).get("inn") or "")
+        release.wait(2)
+        return Resp()
+
+    monkeypatch.setattr(checko_client.requests, "post", post)
+
+    def run(inn: str) -> None:
+        results.append(checko_client.fetch_method("company", inn))
+
+    first = threading.Thread(target=run, args=("7700000001",))
+    second = threading.Thread(target=run, args=("7700000002",))
+    first.start()
+    second.start()
+    try:
+        deadline = time.time() + 2
+        while time.time() < deadline and not (len(entered) >= 1 and len(results) >= 1):
+            time.sleep(0.01)
+        assert len(entered) == 1
+        assert len(results) == 1
+    finally:
+        release.set()
+        first.join(2)
+        second.join(2)
+    assert len(entered) == 1
+    assert checko_client.requests_used_today() == 1
+    errors = [err for _body, err in results if err]
+    oks = [body for body, err in results if not err]
+    assert len(oks) == 1 and len(errors) == 1
+    assert "исчерпан" in errors[0]
 
 
 def test_checko_cache_write_is_atomic(tmp_path, monkeypatch):

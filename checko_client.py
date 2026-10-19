@@ -93,9 +93,23 @@ def requests_used_today() -> int:
     return int(q.get("count") or 0)
 
 
-def _bump_quota() -> bool:
-    today = time.strftime("%Y-%m-%d", time.gmtime())
+def _with_quota_lock(action):
     lock_path = _quota_path().with_suffix(".lock")
+    with _quota_lock:
+        if _fcntl is None:
+            return action()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a+", encoding="utf-8") as lf:
+            _fcntl.flock(lf.fileno(), _fcntl.LOCK_EX)
+            try:
+                return action()
+            finally:
+                _fcntl.flock(lf.fileno(), _fcntl.LOCK_UN)
+
+
+def _bump_quota() -> bool:
+    """Резерв одной попытки до запроса. False — дневной лимит уже выбран."""
+    today = time.strftime("%Y-%m-%d", time.gmtime())
 
     def _do() -> bool:
         q = _load_quota()
@@ -107,16 +121,23 @@ def _bump_quota() -> bool:
         _save_quota(q)
         return True
 
-    with _quota_lock:
-        if _fcntl is None:
-            return _do()
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(lock_path, "a+", encoding="utf-8") as lf:
-            _fcntl.flock(lf.fileno(), _fcntl.LOCK_EX)
-            try:
-                return _do()
-            finally:
-                _fcntl.flock(lf.fileno(), _fcntl.LOCK_UN)
+    return _with_quota_lock(_do)
+
+
+def _refund_quota(day: str) -> None:
+    """Вернуть резерв, если запрос не удался."""
+
+    def _do() -> None:
+        q = _load_quota()
+        if q.get("day") != day:
+            return
+        count = int(q.get("count") or 0)
+        if count <= 0:
+            return
+        q["count"] = count - 1
+        _save_quota(q)
+
+    _with_quota_lock(_do)
 
 
 def _read_cache(method: str, inn: str) -> dict | None:
@@ -157,11 +178,16 @@ def fetch_method(method: str, inn: str, extra: dict | None = None) -> tuple[dict
     if cached is not None:
         return cached, None
 
-    if requests_used_today() >= DAILY_LIMIT:
+    quota_day = time.strftime("%Y-%m-%d", time.gmtime())
+    if not _bump_quota():
         return None, (
             f"⚠️ Лимит Checko на сегодня ({DAILY_LIMIT} запросов) исчерпан.\n"
             "Завтра сбросится; кэш за сутки ещё работает."
         )
+
+    def _give_back(message: str) -> tuple[dict | None, str]:
+        _refund_quota(quota_day)
+        return None, message
 
     payload = {"key": _api_key(), "inn": inn}
     if extra:
@@ -170,21 +196,22 @@ def fetch_method(method: str, inn: str, extra: dict | None = None) -> tuple[dict
     try:
         r = requests.post(url, json=payload, timeout=30)
         if r.status_code in (402, 429):
-            return None, "⚠️ Лимит или оплата Checko. Проверьте тариф в личном кабинете."
+            return _give_back(
+                "⚠️ Лимит или оплата Checko. Проверьте тариф в личном кабинете."
+            )
         r.raise_for_status()
         body = r.json()
     except requests.HTTPError as exc:
         logging.warning("Checko HTTP %s: %s", method, exc)
         code = getattr(exc.response, "status_code", "?")
-        return None, f"⚠️ Checko вернул ошибку HTTP ({code})."
+        return _give_back(f"⚠️ Checko вернул ошибку HTTP ({code}).")
     except Exception as exc:
         logging.warning("Checko request failed %s: %s", method, exc)
-        return None, "⚠️ Не удалось связаться с Checko. Попробуйте позже."
+        return _give_back("⚠️ Не удалось связаться с Checko. Попробуйте позже.")
 
     if isinstance(body, dict) and body.get("error"):
-        return None, f"⚠️ Checko: {body.get('error')}"
+        return _give_back(f"⚠️ Checko: {body.get('error')}")
 
-    _bump_quota()
     _write_cache(method, inn, body)
     return body, None
 
