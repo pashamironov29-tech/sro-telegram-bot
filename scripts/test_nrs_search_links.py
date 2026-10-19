@@ -180,7 +180,8 @@ def test_live_nopriz():
         ("Мелик-Гусейнов Михаил Сергеевич", 0, None),
     ]
     for fio, min_n, exact_reg in checks:
-        rows, total = _nopriz_lookup_by_fio(fio)
+        got = _nopriz_lookup_by_fio(fio)
+        rows, total = got[0], got[1]
         n = len(rows)
         if min_n == 0 and n != 0:
             print("FAIL live expect 0 got", n, fio)
@@ -196,7 +197,8 @@ def test_live_nopriz():
         if exact_reg and rows and not rows[0].get("work_types"):
             print("FAIL live missing work_types", fio, rows[0])
             failed += 1
-    rows, total = _nopriz_lookup_by_number("П-122864")
+    got_num = _nopriz_lookup_by_number("П-122864")
+    rows, total = got_num[0], got_num[1]
     if not rows or rows[0]["fio"] != "Шигапов Артём Ильдарович":
         print("FAIL live NOPRIZ number", rows)
         failed += 1

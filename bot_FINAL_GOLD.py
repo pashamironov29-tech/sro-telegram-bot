@@ -2741,6 +2741,10 @@ def handle_text(message):
                 reply_markup=get_onboarding_keyboard(),
             )
             return
+        if looks_like_question(user_text):
+            exit_search_mode(message.chat.id)
+            send_question_reply(message.chat.id, user_text)
+            return
         if len(user_text.strip()) >= 2 and handle_org_name_search(message.chat.id, user_text, force=True):
             clear_await_inn(message.chat.id)
             pick_ids = pending_sro_ids(message.chat.id)
@@ -3276,6 +3280,10 @@ def handle_text(message):
 
     _mode = active_input_mode(message.chat.id)
     if _mode == "search":
+        if looks_like_question(user_text):
+            exit_search_mode(message.chat.id)
+            send_question_reply(message.chat.id, user_text)
+            return
         handle_universal_search(message.chat.id, user_text)
         return
 
@@ -3324,35 +3332,35 @@ def handle_info_list_quiz_callback(call):
         action = (call.data or "").split(":", 1)[-1]
         if action == "cancel":
             cancel_info_list_quiz(chat_id)
-            bot.answer_callback_query(call.id, "Отмена")
+            safe_answer_callback(call.id, "Отмена")
             bot.send_message(chat_id, "Ок, без заполнения.")
             return
         if action == "ask" and not can_use_info_list_quiz(chat_id):
-            bot.answer_callback_query(call.id, "Нет доступа")
+            safe_answer_callback(call.id, "Нет доступа")
             bot.send_message(
                 chat_id,
                 "⛔ Заполнение инфолиста вопросами — только для админов и контролёров.",
             )
             return
         if action == "empty":
-            bot.answer_callback_query(call.id, "Пустой шаблон")
+            safe_answer_callback(call.id, "Пустой шаблон")
             _send_info_list_document(chat_id, folder_path, empty_only=True)
             return
         if action == "reestr":
-            bot.answer_callback_query(call.id, "Из реестра")
+            safe_answer_callback(call.id, "Из реестра")
             _send_info_list_document(chat_id, folder_path)
             return
         if action == "ask":
             ctx = get_user_context(chat_id)
             inn = (ctx or {}).get("inn")
             if not inn:
-                bot.answer_callback_query(call.id, "Сначала ИНН")
+                safe_answer_callback(call.id, "Сначала ИНН")
                 bot.send_message(
                     chat_id,
                     "Сначала найдите организацию по ИНН — тогда часть полей возьму из реестра.",
                 )
                 return
-            bot.answer_callback_query(call.id, "Начинаем")
+            safe_answer_callback(call.id, "Начинаем")
             text = start_info_list_quiz(chat_id, inn, get_user_sro_id(chat_id))
             finish_button_reply(
                 chat_id,
@@ -3360,7 +3368,7 @@ def handle_info_list_quiz_callback(call):
                 reply_markup=get_info_list_quiz_keyboard(),
             )
             return
-        bot.answer_callback_query(call.id, "Неизвестная кнопка")
+        safe_answer_callback(call.id, "Неизвестная кнопка")
     except Exception:
         logging.error("Ошибка в handle_info_list_quiz_callback", exc_info=True)
 
@@ -3368,7 +3376,7 @@ def handle_info_list_quiz_callback(call):
 @bot.callback_query_handler(func=lambda call: call.data == FB_CALLBACK)
 def handle_feedback_bad(call):
     try:
-        bot.answer_callback_query(call.id, "Запишем замечание")
+        safe_answer_callback(call.id, "Запишем замечание")
         if not has_last_ai(call.message.chat.id):
             bot.send_message(
                 call.message.chat.id,
@@ -3384,7 +3392,7 @@ def handle_feedback_bad(call):
 def handle_fees_doc_download(call):
     try:
         sro_id = call.data.split(":", 1)[1]
-        bot.answer_callback_query(call.id, "Отправляю файл…")
+        safe_answer_callback(call.id, "Отправляю файл…")
         pol_path = fees_doc_path(sro_id)
         if not pol_path or not os.path.isfile(pol_path):
             bot.send_message(
@@ -3445,7 +3453,7 @@ def handle_checko_callbacks(call):
         return
     if kind == "f" and len(parts) >= 3:
         inn = parts[2]
-        print(f"🔎 chk:f inn={inn} chat={chat_id}", flush=True)
+        print(f"🔎 chk:f inn={inn}", flush=True)
         safe_answer_callback(call.id, "Загружаю…")
         try:
             bot.send_chat_action(chat_id, "typing")
@@ -3517,13 +3525,20 @@ def handle_checko_callbacks(call):
     if kind == "s" and len(parts) >= 4:
         section = parts[2]
         inn = parts[3]
-        print(f"🔎 chk:s section={section} inn={inn} chat={chat_id}", flush=True)
+        print(f"🔎 chk:s section={section} inn={inn}", flush=True)
         safe_answer_callback(call.id, "Загружаю…")
         try:
             bot.send_chat_action(chat_id, "typing")
         except Exception:
             pass
-        text = format_checko_section(section, inn)
+        try:
+            text = format_checko_section(section, inn)
+        except Exception as exc:
+            print(f"⚠️ Checko {section}: {exc}", flush=True)
+            text = (
+                f"⚠️ Не удалось загрузить раздел (ИНН <code>{inn}</code>).\n"
+                "Выберите другой раздел или откройте сайт."
+            )
         safe_send_message(
             chat_id,
             text,
@@ -3565,7 +3580,7 @@ def handle_inline_search(call):
     chat_id = call.message.chat.id
 
     if inn in sro_database or inn in reestr_database:
-        bot.answer_callback_query(call.id, "⏳ Ищу данные по организации...")
+        safe_answer_callback(call.id, "⏳ Ищу данные по организации...")
         try:
             bot.delete_message(chat_id, call.message.message_id)
         except Exception:
@@ -3587,7 +3602,7 @@ def handle_inline_search(call):
         )
         return
     else:
-        bot.answer_callback_query(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
+        safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
     BOT_VERSION = "1.13.3"

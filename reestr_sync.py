@@ -195,11 +195,12 @@ def _latest_disciplinary(measures: list[dict]) -> dict | None:
 
 
 def _status_from_disciplinary(measures: list[dict]) -> str | None:
-    """На карточке исключение часто только в дисциплине, а в списке ещё «Член СРО»."""
-    for item in reversed(measures or []):
-        measure = (item.get("measure") or "").lower()
-        if "исключен" in measure or "права прекращено" in measure:
-            return "Исключен"
+    """Исключение — только последняя мера. Старая запись в истории статус не держит."""
+    if not measures:
+        return None
+    measure = (measures[-1].get("measure") or "").lower()
+    if "исключен" in measure or "права прекращено" in measure:
+        return "Исключен"
     return None
 
 
@@ -225,8 +226,8 @@ def membership_needs_detail_fetch(membership: dict) -> bool:
         return False
     if not membership.get("inspections_by_year"):
         return True
-    # уровни КФ появились позже — один раз дотянуть карточку
-    if "kf_level_vv" not in membership:
+    # Уровня может не быть. После успешной карточки стоит пометка, иначе догрузка крутится.
+    if "kf_level_vv" not in membership and not membership.get("kf_levels_checked"):
         return True
     return False
 
@@ -293,7 +294,10 @@ def _name_line_value(html: str, name: str) -> str | None:
 def _format_kf_money(raw: str | None) -> str | None:
     if not raw:
         return None
-    digits = re.sub(r"[^\d]", "", raw)
+    text = raw.replace("\xa0", " ").strip()
+    # «1 500 000,00» — копейки не склеивать с рублями.
+    text = re.sub(r"[,.](\d{2})(?!\d)\s*(?:руб\.?|₽)?\s*$", "", text, flags=re.I)
+    digits = re.sub(r"[^\d]", "", text)
     if not digits:
         return None
     try:
@@ -359,6 +363,7 @@ def _parse_detail_page(html: str) -> dict:
         "inspections_by_year": _group_inspections_by_year(inspections),
         "disciplinary_measures": disciplinary,
         "latest_disciplinary": _latest_disciplinary(disciplinary),
+        "kf_levels_checked": True,
     }
     status_from_disc = _status_from_disciplinary(disciplinary)
     if status_from_disc:
@@ -401,14 +406,16 @@ def _prefer_membership(current: dict | None, new: dict) -> dict:
     ):
         if key not in new and key in current:
             merged[key] = current[key]
-    # Свежий «Исключен» из списка всегда побеждает.
-    # Если список ещё «Член СРО», а в кэше уже исключение с карточки — оставляем исключение.
+    # Список часто ещё «Член СРО», а исключение есть только в мерах карточки.
+    # Карточку повторно не качаем, поэтому смотрим последнюю меру из кэша.
     new_status = (new.get("status") or "").strip()
     cur_status = (current.get("status") or "").strip()
-    if new_status and new_status != "Член СРО":
+    if new_status:
         merged["status"] = new_status
-    elif cur_status == "Исключен" and new_status == "Член СРО":
-        merged["status"] = "Исключен"
+    if new_status == "Член СРО" and cur_status == "Исключен":
+        from_card = _status_from_disciplinary(merged.get("disciplinary_measures") or [])
+        if from_card == "Исключен":
+            merged["status"] = "Исключен"
     if current.get("duplicated") or new.get("duplicated"):
         merged["duplicated"] = True
     return merged
@@ -963,7 +970,7 @@ def plan_year_from_filename(file_name: str) -> int | None:
 def ensure_plan_month_year(month: str, file_name: str) -> str:
     """Если в ячейке месяца нет года, дописать год из имени файла."""
     part = (month or "").strip()
-    if not part or part == "Не указан":
+    if not part or part.lower() == "не указан":
         return part or month
     if re.search(r"\d{4}", part):
         return part
@@ -974,9 +981,9 @@ def ensure_plan_month_year(month: str, file_name: str) -> str:
 
 
 def _format_plan_month(month_raw: str) -> str:
-    if not month_raw or month_raw == "Не указан":
+    part = (month_raw or "").strip()
+    if not part or re.fullmatch(r"не указан(?:\s+20\d{2})?", part.lower()):
         return "не указан"
-    part = month_raw.strip()
     if re.search(r"\d{4}", part):
         return part
     return f"{part} {datetime.now().year}"

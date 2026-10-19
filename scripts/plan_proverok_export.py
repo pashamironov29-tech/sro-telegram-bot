@@ -737,7 +737,7 @@ def export(xlsx: Path, out_dir: Path, year: int = 2026, only_sro: str | None = N
 
         # full year
         doc = build_document(meta, year, months)
-        full_path = folder / f"plan_proverok_{safe_name(sro)}_2026.docx"
+        full_path = folder / f"plan_proverok_{safe_name(sro)}_{year}.docx"
         doc.save(str(full_path))
         total = sum(len(v) for v in months.values())
         summary.append(f"{sro}: год={total} -> {full_path.name}")
@@ -748,7 +748,7 @@ def export(xlsx: Path, out_dir: Path, year: int = 2026, only_sro: str | None = N
             if not items:
                 continue
             doc_m = build_document(meta, year, {month: items}, months_filter=[month])
-            mpath = months_dir / f"{safe_name(sro)}_2026_{MONTH_FILE[month]}.docx"
+            mpath = months_dir / f"{safe_name(sro)}_{year}_{MONTH_FILE[month]}.docx"
             doc_m.save(str(mpath))
             summary.append(f"  {month}: {len(items)} -> {mpath.name}")
 

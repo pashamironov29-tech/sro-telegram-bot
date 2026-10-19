@@ -815,6 +815,9 @@ def present_found_organization(user_id: int, inn: str) -> str | None:
         return "fork"
     if in_reestr and send_company_card(user_id, clean):
         return "card"
+    if in_reestr:
+        # Карточка в реестре есть, но собрать её не вышло — сообщение уже ушло.
+        return "failed"
     return None
 
 
@@ -847,7 +850,7 @@ def handle_universal_search(user_id: int, user_text: str) -> None:
         if outcome == "card":
             exit_search_mode(user_id)
             return
-        if outcome == "fork":
+        if outcome in ("fork", "failed"):
             return
         send_org_not_found(user_id, user_text)
         return
@@ -876,9 +879,15 @@ def handle_universal_search(user_id: int, user_text: str) -> None:
         )
         return
     if len(results) > 1:
+        note = ""
+        if len(results) > NAME_SEARCH_LIST_MAX:
+            note = (
+                f"\n\n⚠️ Показаны первые {NAME_SEARCH_LIST_MAX} из {len(results)}. "
+                "В списке не все — уточните название."
+            )
         send(
             user_id,
-            f"🔍 Найдено <b>{len(results)}</b> организаций. Выберите кнопку:",
+            f"🔍 Найдено <b>{len(results)}</b> организаций. Выберите кнопку:{note}",
             name_results_keyboard(results),
         )
         return
@@ -1162,6 +1171,10 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
 
     mode = active_input_mode(user_id)
     if mode == "search":
+        if looks_like_question(user_text):
+            exit_search_mode(user_id)
+            send_question_reply(user_id, user_text)
+            return
         handle_universal_search(user_id, user_text)
         return
     if mode == "specialist":
@@ -1187,6 +1200,8 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
             outcome = present_found_organization(user_id, clean)
             if outcome == "fork":
                 clear_await_inn(user_id)
+                return
+            if outcome == "failed":
                 return
             if outcome == "card":
                 clear_await_inn(user_id)
@@ -1301,6 +1316,7 @@ def _drain_user_queue(uid: int) -> None:
             queue = _user_update_queues.get(uid)
             if not queue:
                 _user_update_busy.discard(uid)
+                _user_update_queues.pop(uid, None)
                 return
             update = queue.popleft()
         _run_dispatched_update(update)
