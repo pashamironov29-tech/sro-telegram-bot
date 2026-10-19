@@ -417,7 +417,7 @@ if [[ ! -d "$app" ]]; then
   echo "NO_DIR" >&2
   exit 1
 fi
-df -Pk --output=avail -- "$app" | tail -n 1
+df -Pk -- "$app" | awk 'NR==2 {print $4}'
 EOS
 )
 free_kb=${free_kb//[[:space:]]/}
