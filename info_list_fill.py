@@ -933,23 +933,48 @@ def generate_info_list_for_inn(
     return output_path, form_data, filled
 
 
+_DIRECTOR_TITLES = (
+    "Временно исполняющий обязанности Генерального директора",
+    "Временно исполняющий обязанности директора",
+    "Временно исполняющий обязанности",
+    "Исполняющий обязанности Генерального директора",
+    "Исполняющий обязанности директора",
+    "Исполняющий обязанности",
+    "Генеральный директор",
+    "Исполнительный директор",
+    "Коммерческий директор",
+    "Индивидуальный предприниматель",
+    "Управляющий — индивидуальный предприниматель",
+    "Управляющий",
+    "Президент",
+    "Директор",
+)
+
+
 def _split_director(director: str) -> tuple[str, str]:
-    text = (director or "").strip()
+    text = re.sub(r"\s+", " ", (director or "").strip())
     if not text:
         return "", ""
-    titles = (
-        "Генеральный директор",
-        "Исполнительный директор",
-        "Коммерческий директор",
-        "Индивидуальный предприниматель",
-        "Управляющий — индивидуальный предприниматель",
-        "Управляющий",
-        "Президент",
-        "Директор",
+    text = re.sub(
+        r"^(?:врио|в\.\s*и\.\s*о\.)\s+",
+        "Временно исполняющий обязанности ",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
     )
-    low = text.lower()
-    for title in titles:
-        if low.startswith(title.lower()):
+    text = re.sub(
+        r"^(?:и\.\s*о\.|ио)\s+",
+        "Исполняющий обязанности ",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    low = text.lower().replace("ё", "е").replace(
+        "исполняющая обязанности", "исполняющий обязанности"
+    )
+    for title in _DIRECTOR_TITLES:
+        tlow = title.lower().replace("ё", "е")
+        if low.startswith(tlow):
             return title, text[len(title) :].strip(" ,–—-")
     return "", text
 

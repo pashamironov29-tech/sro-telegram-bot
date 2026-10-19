@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -132,11 +133,13 @@ def _read_cache(method: str, inn: str) -> dict | None:
 
 
 def _write_cache(method: str, inn: str, data: dict) -> None:
-    p = _cache_path(method, inn)
-    p.write_text(
+    path = _cache_path(method, inn)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
         json.dumps({"ts": time.time(), "data": data}, ensure_ascii=False),
         encoding="utf-8",
     )
+    os.replace(tmp, path)
 
 
 def checko_configured() -> bool:
@@ -154,7 +157,7 @@ def fetch_method(method: str, inn: str, extra: dict | None = None) -> tuple[dict
     if cached is not None:
         return cached, None
 
-    if not _bump_quota():
+    if requests_used_today() >= DAILY_LIMIT:
         return None, (
             f"⚠️ Лимит Checko на сегодня ({DAILY_LIMIT} запросов) исчерпан.\n"
             "Завтра сбросится; кэш за сутки ещё работает."
@@ -181,6 +184,7 @@ def fetch_method(method: str, inn: str, extra: dict | None = None) -> tuple[dict
     if isinstance(body, dict) and body.get("error"):
         return None, f"⚠️ Checko: {body.get('error')}"
 
+    _bump_quota()
     _write_cache(method, inn, body)
     return body, None
 

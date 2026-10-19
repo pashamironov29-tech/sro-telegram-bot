@@ -118,8 +118,8 @@ def blanki_file_path(
         else:
             # Пустой бланк без ИНН: сначала оригинал .doc — иначе «улетает» таблица ИНН
             candidates = [fname, docx_name, *[c for c in candidates if c not in (fname, docx_name)]]
-    seen: set[str] = set()
     for folder in folders:
+        seen: set[str] = set()
         for name in candidates:
             if name in seen:
                 continue

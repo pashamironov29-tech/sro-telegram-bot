@@ -201,6 +201,9 @@ def check_rows(
         if mem.get("duplicated"):
             reasons.append("Организация задваивается")
             mark = "duplicate"
+        elif status == "НЕТ В КЭШЕ":
+            reasons.append("нет в кэше")
+            mark = "nocache"
         elif status != "Член СРО":
             reasons.append("исключена")
             mark = "exclude"

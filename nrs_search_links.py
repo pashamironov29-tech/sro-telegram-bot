@@ -313,13 +313,16 @@ def _nopriz_api(
     limit: int = 5,
     chat_id: int | None = None,
     sort_fio: str = "",
-) -> tuple[list[dict], int | None]:
-    """Запрос к API НОПРИЗ → (строки, всего в реестре или None)."""
+) -> tuple[list[dict], int | None, str | None]:
+    """Запрос к API НОПРИЗ → (строки, всего или None, ошибка или None).
+
+    Ошибка — «unavailable»: троттлинг или сбой сети. Это не пустой список.
+    """
     if chat_id is not None:
         now = time.monotonic()
         last = _nopriz_last_call.get(chat_id, 0.0)
         if now - last < _NOPRIZ_COOLDOWN_SEC:
-            return [], None
+            return [], None, "unavailable"
         _nopriz_last_call[chat_id] = now
     try:
         r = requests.post(
@@ -343,7 +346,7 @@ def _nopriz_api(
         except (TypeError, ValueError):
             total = None
     except Exception:
-        return [], None
+        return [], None, "unavailable"
     out = []
     fio_n = re.sub(r"\s+", " ", sort_fio).strip().lower()
     for row in rows:
@@ -362,19 +365,21 @@ def _nopriz_api(
             break
     if fio_n:
         out.sort(key=lambda x: 0 if x["fio"].lower() == fio_n else 1)
-    return out, total
+    return out, total, None
 
 
-def _nopriz_lookup_by_fio(fio: str, *, limit: int = 5, chat_id: int | None = None) -> tuple[list[dict], int | None]:
+def _nopriz_lookup_by_fio(
+    fio: str, *, limit: int = 5, chat_id: int | None = None
+) -> tuple[list[dict], int | None, str | None]:
     return _nopriz_api({"fio": fio}, limit=limit, chat_id=chat_id, sort_fio=fio)
 
 
 def _nopriz_lookup_by_number(
     number: str, *, chat_id: int | None = None
-) -> tuple[list[dict], int | None]:
+) -> tuple[list[dict], int | None, str | None]:
     n = normalize_nrs_number(number)
     if not n or not _is_nopriz_number(n):
-        return [], None
+        return [], None, None
     return _nopriz_api({"registrationNumber": n}, limit=1, chat_id=chat_id)
 
 def _a(url: str, title: str) -> str:
@@ -413,14 +418,19 @@ def format_nrs_link_reply(query: str, chat_id: int | None = None) -> str:
     nopriz_hit: dict | None = None
     nopriz_matches: list[dict] = []
     nopriz_total: int | None = None
+    nopriz_error: str | None = None
     if is_nopriz:
-        nopriz_matches, nopriz_total = _nopriz_lookup_by_number(number, chat_id=chat_id)
+        nopriz_matches, nopriz_total, nopriz_error = _nopriz_lookup_by_number(
+            number, chat_id=chat_id
+        )
         if nopriz_matches:
             nopriz_hit = nopriz_matches[0]
             if not fio:
                 fio = nopriz_hit["fio"]
     elif not is_nostroy and fio and not number:
-        nopriz_matches, nopriz_total = _nopriz_lookup_by_fio(fio, chat_id=chat_id)
+        nopriz_matches, nopriz_total, nopriz_error = _nopriz_lookup_by_fio(
+            fio, chat_id=chat_id
+        )
         if len(nopriz_matches) == 1:
             nopriz_hit = nopriz_matches[0]
 
@@ -488,7 +498,10 @@ def format_nrs_link_reply(query: str, chat_id: int | None = None) -> str:
             lines.extend(_format_nopriz_work_lines(nopriz_hit.get("work_types") or []))
         else:
             lines.append(_a(_nopriz_url(number=number), "➡️ Открыть в НОПРИЗ"))
-            lines.append("<i>Карточку на сайте не нашли — проверьте номер.</i>")
+            if nopriz_error:
+                lines.append("<i>Сервис недоступен, попробуйте позже.</i>")
+            else:
+                lines.append("<i>Карточку на сайте не нашли — проверьте номер.</i>")
     elif nopriz_hit:
         m = nopriz_hit
         lines.append(
@@ -500,7 +513,10 @@ def format_nrs_link_reply(query: str, chat_id: int | None = None) -> str:
         # Не С- и не П- (редкий формат) — просто ссылка
         lines.append(_a(_nopriz_url(number=number, fio=fio), "➡️ Открыть в НОПРИЗ"))
     else:
-        if not nopriz_matches:
+        if nopriz_error:
+            lines.append(_a(_nopriz_url(fio=fio), "➡️ Открыть в НОПРИЗ"))
+            lines.append("<i>Сервис недоступен, попробуйте позже.</i>")
+        elif not nopriz_matches:
             lines.append(_a(_nopriz_url(fio=fio), "➡️ Открыть в НОПРИЗ"))
             lines.append("<i>Если список пустой — уточните номер (П-, ПИ-…).</i>")
         else:

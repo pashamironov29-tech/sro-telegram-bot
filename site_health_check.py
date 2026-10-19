@@ -13,6 +13,7 @@ import argparse
 import html
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, asdict
@@ -21,6 +22,8 @@ from typing import Callable
 from urllib.parse import urlparse
 
 import requests
+
+from log_redact import redact_secrets
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(CURRENT_DIR, "site_health_state.json")
@@ -44,6 +47,30 @@ class CheckResult:
     ok: bool
     detail: str
     url: str = ""
+
+
+def _exc_text(exc: BaseException) -> str:
+    return redact_secrets(str(exc))
+
+
+def _clip_telegram_html(text: str, limit: int = 4000) -> str:
+    """Обрезать текст для Telegram, не разрывая тег и закрывая незакрытые."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    newline = cut.rfind("\n")
+    if newline >= limit // 2:
+        cut = cut[: newline]
+    last_open = cut.rfind("<")
+    last_close = cut.rfind(">")
+    if last_open > last_close:
+        cut = cut[:last_open]
+    for tag in ("b", "i", "code", "a"):
+        opens = len(re.findall(rf"<{tag}(?:\s[^>]*)?>", cut, flags=re.I))
+        closes = len(re.findall(rf"</{tag}>", cut, flags=re.I))
+        if opens > closes:
+            cut += f"</{tag}>" * (opens - closes)
+    return cut
 
 
 def _admin_ids() -> list[int]:
@@ -87,7 +114,7 @@ def _send_telegram(text: str) -> bool:
                 api,
                 json={
                     "chat_id": admin_id,
-                    "text": text[:4000],
+                    "text": _clip_telegram_html(text),
                     "parse_mode": "HTML",
                     "disable_web_page_preview": True,
                 },
@@ -97,9 +124,12 @@ def _send_telegram(text: str) -> bool:
             if data.get("ok"):
                 ok_any = True
             else:
-                print(f"WARN telegram {admin_id}: {data}", flush=True)
+                print(
+                    f"WARN telegram {admin_id}: {redact_secrets(str(data))}",
+                    flush=True,
+                )
         except Exception as exc:
-            print(f"WARN telegram {admin_id}: {exc}", flush=True)
+            print(f"WARN telegram {admin_id}: {_exc_text(exc)}", flush=True)
     return ok_any
 
 
@@ -108,7 +138,7 @@ def _get(url: str) -> tuple[int | None, str, str | None]:
         r = requests.get(url, headers=UA, timeout=TIMEOUT, allow_redirects=True)
         return r.status_code, r.text or "", None
     except Exception as exc:
-        return None, "", str(exc)
+        return None, "", _exc_text(exc)
 
 
 def check_nostroy() -> CheckResult:
@@ -153,7 +183,7 @@ def check_nopriz() -> CheckResult:
             timeout=TIMEOUT,
         )
     except Exception as exc:
-        return CheckResult("НОПРИЗ API", False, f"сеть: {exc}", NOPRIZ_API)
+        return CheckResult("НОПРИЗ API", False, f"сеть: {_exc_text(exc)}", NOPRIZ_API)
 
     if r.status_code != 200:
         return CheckResult("НОПРИЗ API", False, f"HTTP {r.status_code}", NOPRIZ_API)
@@ -161,7 +191,7 @@ def check_nopriz() -> CheckResult:
         payload = r.json().get("data") or {}
         rows = payload.get("data") or []
     except Exception as exc:
-        return CheckResult("НОПРИЗ API", False, f"не JSON: {exc}", NOPRIZ_API)
+        return CheckResult("НОПРИЗ API", False, f"не JSON: {_exc_text(exc)}", NOPRIZ_API)
     if not rows:
         return CheckResult(
             "НОПРИЗ API",
@@ -284,7 +314,7 @@ def save_state(results: list[CheckResult]) -> None:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
     except OSError as exc:
-        print(f"WARN state: {exc}", flush=True)
+        print(f"WARN state: {_exc_text(exc)}", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -333,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
                 f.write(f"{'OK' if r.ok else 'FAIL'}\t{r.name}\t{r.detail}\t{r.url}\n")
         print(f"log: {log_path}", flush=True)
     except OSError as exc:
-        print(f"WARN log: {exc}", flush=True)
+        print(f"WARN log: {_exc_text(exc)}", flush=True)
 
     return 1 if failed else 0
 

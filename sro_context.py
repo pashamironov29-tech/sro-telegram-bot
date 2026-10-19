@@ -187,6 +187,7 @@ def begin_joiner_activity_pick(chat_id: int) -> None:
     _pending_sro_pick.pop(chat_id, None)
     _pickable_sro_cache.pop(chat_id, None)
     _user_context.pop(chat_id, None)
+    _persist_context()
 
 
 def begin_joiner_sro_pick(chat_id: int, activity: str) -> list[str]:
@@ -481,6 +482,7 @@ def apply_context_from_memberships(chat_id: int, inn: str, membership_ids: list[
 
         _pending_sro_pick[chat_id] = list(membership_ids)
         _user_context[chat_id] = {"sro_id": None, "inn": inn}
+        _persist_context()
         return (
             "\n\n⚠️ <b>Организация состоит в нескольких СРО.</b>\n"
             "Сначала выберите <b>своё СРО</b> кнопкой ниже — от этого зависят "

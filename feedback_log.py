@@ -14,6 +14,8 @@ _last_ai: dict[int, dict] = {}
 # chat_id -> момент, когда спросили «какой ответ ждали»
 _await_expected: dict[int, float] = {}
 AWAIT_TTL_SEC = 10 * 60
+# Кнопка «ответ не помог» на старом сообщении. Дольше, чем ожидание фразы.
+LAST_AI_TTL_SEC = 24 * 60 * 60
 
 FB_CALLBACK = "fb:bad"
 FB_PHRASES = (
@@ -45,8 +47,23 @@ def remember_ai_reply(
     }
 
 
+def _fresh_last_ai(chat_id: int) -> dict | None:
+    last = _last_ai.get(chat_id)
+    if not last:
+        return None
+    try:
+        age = time.time() - float(last.get("ts") or 0)
+    except (TypeError, ValueError):
+        age = LAST_AI_TTL_SEC + 1
+    if age > LAST_AI_TTL_SEC:
+        _last_ai.pop(chat_id, None)
+        _await_expected.pop(chat_id, None)
+        return None
+    return last
+
+
 def has_last_ai(chat_id: int) -> bool:
-    return chat_id in _last_ai
+    return _fresh_last_ai(chat_id) is not None
 
 
 def is_awaiting_expected(chat_id: int) -> bool:
@@ -61,7 +78,7 @@ def is_awaiting_expected(chat_id: int) -> bool:
 
 def begin_await_expected(chat_id: int) -> bool:
     """True, если есть что логировать (был ответ)."""
-    if chat_id not in _last_ai:
+    if _fresh_last_ai(chat_id) is None:
         return False
     _await_expected[chat_id] = time.time()
     return True
@@ -78,7 +95,7 @@ def is_feedback_phrase(text: str) -> bool:
 
 def append_feedback(chat_id: int, expected: str | None) -> bool:
     """Пишет строку в jsonl. False, если нечего писать."""
-    last = _last_ai.get(chat_id)
+    last = _fresh_last_ai(chat_id)
     if not last:
         _await_expected.pop(chat_id, None)
         return False
