@@ -1,0 +1,84 @@
+# Выкладка на VPS после тестов. Джоба deploy ждёт environment production.
+
+name: deploy
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Зависимости
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Тесты
+        run: python -m pytest -q
+        env:
+          PYTHONIOENCODING: utf-8
+
+  deploy:
+    needs: test
+    if: success() && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Выкладка на VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          DEPLOY_RSYNC_EXCLUDES: |
+            config_keys.py
+            contacts_data.py
+            .env*
+            *.pem
+            *.key
+            vps/
+            .github/
+            tests/
+            docs/
+            venv/
+            backups/
+            sro_data/
+            sro files/
+            logs/
+            *.log
+            bot_users.json*
+            user_sro_context.json
+            contacts_access.json
+            reestr_cache.json*
+            *_cache*.json
+            specialist_mode*.json
+            nrs_link_mode.json
+            doc_checklists.json
+            feedback_questions.jsonl
+            *.sqlite*
+            __pycache__/
+        run: |
+          set +x
+          set -euo pipefail
+          bash scripts/deploy_vps.sh

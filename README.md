@@ -76,9 +76,21 @@ Telegram и MAX пишут один `bot_users.json`. На Linux процесс�
 
 ## Деплой
 
-Краткие заметки: `docs/VPS_SETUP.md`, `docs/VPS_SECURITY.md`, `docs/VPS_5_MIN_CHECK.md`, `docs/DEPLOY_1.10.md`.
+Push в `master` запускает `.github/workflows/deploy.yml`: тесты, затем выкладка в `/opt/sro-bot`. Джоба `deploy` привязана к environment `production`. Если в этом environment включены Required reviewers, копирование ждёт кнопку подтверждения.
 
-На VPS после заливки: `systemctl restart sro-bot sro-max-bot`.
+Секреты: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`. Необязательные: `VPS_PORT` (иначе 22), `VPS_KNOWN_HOSTS` (иначе ключ хоста берётся через ssh-keyscan на время прогона).
+
+На сервер попадают только файлы из git. `config_keys.py`, `contacts_data.py` и каталог `vps/` не затираются. Заменённые файлы до копирования лежат в `/opt/sro-bot/backups/auto-ГГГГММДД-ЧЧММСС` (последние 10 каталогов `auto-*`). После копирования перезапускаются только `sro-bot` и `sro-max-bot`.
+
+Ручной откат:
+
+```bash
+cp -a /opt/sro-bot/backups/auto-…/files/. /opt/sro-bot/ && systemctl restart sro-bot sro-max-bot
+```
+
+Новые файлы этого прогона перечислены в `changes.txt` рядом с бэкапом — при ручном откате их нужно удалить. `pip` при откате сам не возвращается.
+
+Краткие заметки о первой установке: `docs/VPS_SETUP.md`, `docs/VPS_SECURITY.md`, `docs/VPS_5_MIN_CHECK.md`, `docs/DEPLOY_1.10.md`.
 
 ## Автор
 
