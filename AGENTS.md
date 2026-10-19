@@ -75,7 +75,11 @@ python vps/check_prod_sro_gate.py
 
 ## Выкладка
 
-На VPS каталог `/opt/sro-bot` без git: файлы берутся с GitHub raw по коммиту. Перезапуск: `systemctl restart sro-bot sro-max-bot`. Боевой `config_keys.py` на сервере не затирать.
+Push в `master` запускает `.github/workflows/deploy.yml`: тесты, затем environment `production`. Каталог на VPS — `/opt/sro-bot`, без git. Секреты Actions: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`; по желанию `VPS_PORT` и `VPS_KNOWN_HOSTS`.
+
+Боевой `config_keys.py` не перезаписывать и не читать. Каталог `vps/` на сервере свой, выкладка его не трогает. Рестарт только `sro-bot` и `sro-max-bot` (таймеры подхватят код сами). Бэкапы заменённых файлов: `/opt/sro-bot/backups/auto-*`, последние 10.
+
+Ручной откат: `cp -a /opt/sro-bot/backups/auto-…/files/. /opt/sro-bot/ && systemctl restart sro-bot sro-max-bot`.
 
 Файлы `.sh` с переводами строк Windows (CRLF) на сервере ломаются. Держать LF. Файла `.gitattributes` нет.
 
