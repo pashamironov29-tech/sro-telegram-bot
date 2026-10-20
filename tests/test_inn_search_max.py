@@ -72,10 +72,23 @@ def test_inn_not_found(max_bot):
     assert "✅" not in blob
 
 
-def test_inn_not_found_during_onboarding(max_bot):
+def test_start_unknown_inn_is_ordinary_search(max_bot):
+    """/start не включает ожидание ИНН: промах идёт обычным поиском, без «Пропустить»."""
     _text(max_bot, "/start")
+    assert sro_context.is_awaiting_inn(UID) is False
     max_bot.clear()
 
+    _text(max_bot, INN_ABSENT)
+
+    blob = max_bot.blob()
+    assert f"Организация с ИНН <code>{INN_ABSENT}</code>" in blob
+    assert "не найдена в базе бота" in blob
+    assert "menu:skip" not in max_bot.callback_payloads()
+
+
+def test_inn_not_found_during_onboarding(max_bot):
+    """Обработчик ввода ИНН остаётся: при явном ожидании неизвестный ИНН ведёт на «Пропустить»."""
+    sro_context.begin_await_inn(UID)
     _text(max_bot, INN_ABSENT)
 
     blob = max_bot.blob()

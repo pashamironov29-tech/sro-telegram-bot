@@ -59,6 +59,49 @@ def _capture_tg_send(monkeypatch):
     return sent
 
 
+def _keyboard_labels(markup) -> list[str]:
+    labels = []
+    for row in markup.keyboard:
+        for button in row:
+            labels.append(button["text"] if isinstance(button, dict) else button.text)
+    return labels
+
+
+def test_tg_start_welcome_is_main_menu(monkeypatch):
+    sent: list[tuple[str, object]] = []
+
+    def send(chat_id, text, **kwargs):
+        sent.append((text or "", kwargs.get("reply_markup")))
+        return types.SimpleNamespace(message_id=len(sent))
+
+    monkeypatch.setattr(bot_FINAL_GOLD.bot, "send_message", send)
+    chat_id = 616161
+    sro_context.begin_await_inn(chat_id)
+    bot_FINAL_GOLD.send_welcome(_text_message(chat_id, "/start"))
+
+    text, markup = sent[-1]
+    assert "Добро пожаловать в чат-бот реестра и сервисов СРО" in text
+    assert "24/7" in text
+    assert "Пропустить" not in text
+    assert "775-81-11" in text
+    assert _keyboard_labels(markup) == _keyboard_labels(
+        bot_FINAL_GOLD.get_main_keyboard(chat_id)
+    )
+    assert sro_context.is_awaiting_inn(chat_id) is False
+
+    sent.clear()
+    bot_FINAL_GOLD.handle_text(_text_message(chat_id, bot_FINAL_GOLD.NRS_LINK_BUTTON))
+    assert "Проверка в НРС" in sent[-1][0]
+    sent.clear()
+    bot_FINAL_GOLD.handle_text(_text_message(chat_id, bot_FINAL_GOLD.SEARCH_ORG_BUTTON))
+    assert "Универсальный поиск" in sent[-1][0]
+    sent.clear()
+    bot_FINAL_GOLD.handle_text(
+        _text_message(chat_id, bot_FINAL_GOLD.SPECIALIST_BUTTON)
+    )
+    assert "Поиск специалиста по ФИО" in sent[-1][0]
+
+
 def test_onboarding_and_search_question_goes_to_answer(monkeypatch, max_bot):
     chat_id = 515151
     sent = _capture_tg_send(monkeypatch)

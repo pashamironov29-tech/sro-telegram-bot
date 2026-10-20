@@ -185,7 +185,23 @@ def test_checko_refused_outside_controller(max_bot):
 def test_command_start(max_bot):
     max_bot.m.handle_text(UID, "/start", {})
     blob = max_bot.blob()
-    assert "ИНН" in blob or "СРО" in blob
+    assert "Добро пожаловать в чат-бот реестра и сервисов СРО" in blob
+    assert "24/7" in blob
+    assert "15 партнёрских СРО" in blob
+    assert "ИНН или название по всем 15 СРО" in blob
+    assert "ФИО или номер в НОСТРОЙ / НОПРИЗ" in blob
+    assert "в какой организации указан" in blob
+    assert "775-81-11" in blob
+    assert "Пропустить" not in blob
+    payloads = max_bot.callback_payloads()
+    main = [
+        payload
+        for kind, _text, payload in keyboard_buttons(max_bot.m.main_keyboard(UID))
+        if kind == "callback"
+    ]
+    assert payloads == main
+    assert payloads == ["menu:search", "menu:nrs", "menu:spec"]
+    assert "menu:skip" not in payloads
 
 
 def test_command_search(max_bot):

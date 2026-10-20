@@ -2340,34 +2340,22 @@ def send_welcome(message):
     prepare_welcome_reset(message.chat.id)
     cancel_await_expected(message.chat.id)
     cancel_info_list_quiz(message.chat.id)
-    begin_await_inn(message.chat.id)
-
-    controller_hint = ""
-    if is_controller(message.chat.id):
-        controller_hint = "<i>Контролёрам: служебное меню — /controller</i>\n\n"
+    clear_onboarding_flags(message.chat.id)
 
     welcome_text = f"""👋 <b>Добро пожаловать в чат-бот реестра и сервисов СРО!</b>
 
 🕐 Работает <b>24/7</b> для членов и кураторов <b>15 партнёрских СРО</b>.
 
-📌 <b>Уже член СРО?</b> Введите <b>ИНН</b> организации:
-1️⃣ Найдём карточку в реестре
-2️⃣ Если СРО несколько — выберите кнопкой
-3️⃣ Бланки и план проверок — <b>по вашему СРО</b>
+<b>{SEARCH_ORG_BUTTON}</b> — ИНН или название по всем 15 СРО
+<b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ
+<b>{SPECIALIST_BUTTON}</b> — в какой организации указан
 
-🔍 Или сразу нажмите <b>{SEARCH_ORG_BUTTON}</b> — поиск по ИНН/названию без выбора СРО.
-🔎 <b>{SPECIALIST_BUTTON}</b> — в какой организации указан специалист НРС.
-
-🆕 <b>Только вступаете?</b> Чтобы пользоваться меню и бланками до приёма в СРО,
-нажмите <b>Пропустить</b> → направление → <b>конкретное СРО</b>.
-После приёма — снова /start и введите ИНН.
-
-{controller_hint}{OFFICIAL_SOURCE_DISCLAIMER}"""
+{OFFICIAL_SOURCE_DISCLAIMER}"""
 
     finish_button_reply(
         message.chat.id,
         welcome_text,
-        reply_markup=get_onboarding_keyboard(),
+        reply_markup=get_main_keyboard(message.chat.id),
     )
 
 
@@ -2687,6 +2675,23 @@ def handle_text(message):
         open_specialist_search(message.chat.id)
         return
 
+    if user_text == NRS_LINK_BUTTON:
+        if not can_use_nrs_link_pilot(message.chat.id, get_user_sro_id(message.chat.id)):
+            finish_button_reply(
+                message.chat.id,
+                "👤 Пилот НРС доступен только админу в контексте <b>ОГПС</b>.\n"
+                "Выберите организацию ОГПС (ИНН) и откройте меню снова.",
+                reply_markup=get_main_keyboard(message.chat.id),
+            )
+            return
+        prepare_nrs(message.chat.id)
+        finish_button_reply(
+            message.chat.id,
+            format_nrs_link_intro(),
+            reply_markup=get_nrs_link_keyboard(),
+        )
+        return
+
     if user_text == CHANGE_CONTEXT_BUTTON:
         offer_change_context_menu(message.chat.id)
         return
@@ -2767,23 +2772,6 @@ def handle_text(message):
 
     if is_back_to_sro_pick_button(user_text):
         do_back_to_sro_pick(message.chat.id)
-        return
-    
-    if user_text == NRS_LINK_BUTTON:
-        if not can_use_nrs_link_pilot(message.chat.id, get_user_sro_id(message.chat.id)):
-            finish_button_reply(
-                message.chat.id,
-                "👤 Пилот НРС доступен только админу в контексте <b>ОГПС</b>.\n"
-                "Выберите организацию ОГПС (ИНН) и откройте меню снова.",
-                reply_markup=get_main_keyboard(message.chat.id),
-            )
-            return
-        prepare_nrs(message.chat.id)
-        finish_button_reply(
-            message.chat.id,
-            format_nrs_link_intro(),
-            reply_markup=get_nrs_link_keyboard(),
-        )
         return
 
     if user_text == SEARCH_ORG_BUTTON:
@@ -3601,7 +3589,7 @@ def handle_inline_search(call):
         safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.13.4"
+    BOT_VERSION = "1.13.5"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 
