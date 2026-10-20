@@ -74,6 +74,7 @@ MENU_ROUTES = [
     ("menu:help", "Справка"),
     ("menu:nrs", "НРС"),
     ("menu:spec", "ФИО"),
+    ("menu:nat", "НОСТРОЙ"),
     ("faq:root", "FAQ"),
     ("faq:join", "Для вступающих"),
     ("faq:members", "Действующим членам"),
@@ -191,6 +192,7 @@ def test_command_start(max_bot):
     assert "ИНН или название по всем 15 СРО" in blob
     assert "ФИО или номер в НОСТРОЙ / НОПРИЗ" in blob
     assert "в какой организации указан" in blob
+    assert "во всех СРО, не только у 15 партнёров" in blob
     assert "775-81-11" in blob
     assert "Пропустить" not in blob
     payloads = max_bot.callback_payloads()
@@ -200,7 +202,7 @@ def test_command_start(max_bot):
         if kind == "callback"
     ]
     assert payloads == main
-    assert payloads == ["menu:search", "menu:nrs", "menu:spec"]
+    assert payloads == ["menu:search", "menu:nrs", "menu:spec", "menu:nat"]
     assert "menu:skip" not in payloads
 
 

@@ -17,6 +17,7 @@ from local_answers import (
     is_faq_mode,
     is_search_mode,
 )
+from national_reestr import enter_national_mode, exit_national_mode, is_national_mode
 from nrs_search_links import enter_nrs_link_mode, exit_nrs_link_mode, is_nrs_link_mode
 from specialist_reestr import (
     enter_specialist_mode,
@@ -32,6 +33,7 @@ def clear_chat_modes(
     search: bool = True,
     nrs: bool = True,
     specialist: bool = True,
+    national: bool = True,
     controller_work: bool = False,
 ) -> None:
     """Сбросить выбранные режимы. controller_work по умолчанию не трогаем."""
@@ -43,6 +45,8 @@ def clear_chat_modes(
         exit_nrs_link_mode(chat_id)
     if specialist:
         exit_specialist_mode(chat_id)
+    if national:
+        exit_national_mode(chat_id)
     if controller_work:
         exit_controller_work_mode(chat_id)
 
@@ -111,14 +115,30 @@ def prepare_specialist(chat_id: int) -> None:
     enter_specialist_mode(chat_id)
 
 
+def prepare_national(chat_id: int) -> None:
+    """Поиск организации во всех СРО НОСТРОЙ и НОПРИЗ."""
+    clear_chat_modes(
+        chat_id,
+        faq=True,
+        search=True,
+        nrs=True,
+        specialist=True,
+        national=False,
+        controller_work=False,
+    )
+    enter_national_mode(chat_id)
+
+
 def active_input_mode(chat_id: int) -> str:
     """Какой режим ждёт текст пользователя.
 
-    Приоритет: search → specialist → nrs → faq → none.
+    Приоритет: search → national → specialist → nrs → faq → none.
     Нормально prepare_* держит режимы взаимоисключающими.
     """
     if is_search_mode(chat_id):
         return "search"
+    if is_national_mode(chat_id):
+        return "national"
     if is_specialist_mode(chat_id):
         return "specialist"
     if is_nrs_link_mode(chat_id):

@@ -69,10 +69,18 @@ from bot_core import (
     prepare_controller_menu,
     prepare_faq,
     prepare_main_menu,
+    prepare_national,
     prepare_nrs,
     prepare_search,
     prepare_specialist,
     prepare_welcome_reset,
+)
+import national_reestr
+from national_reestr import (
+    CARD_FAIL,
+    NATIONAL_BUTTON,
+    error_result,
+    format_intro as format_national_intro,
 )
 from nrs_search_links import (
     NRS_LINK_BUTTON,
@@ -189,6 +197,7 @@ HELP_TEXT = """ℹ️ <b>Справка — Помощник СРО</b>
 
 🔍 Поиск — ИНН или часть названия по 15 СРО
 🔎 Поиск специалиста по ФИО — организация, где человек указан в НРС
+🏛 Поиск в НОСТРОЙ / НОПРИЗ — ИНН, ОГРН или название во всех СРО
 /info — FAQ и бланки
 Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
 
@@ -229,6 +238,7 @@ def main_keyboard(user_id: int) -> list[dict]:
             callback_button(NRS_LINK_BUTTON, "menu:nrs"),
         ),
         row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
+        row(callback_button(NATIONAL_BUTTON, "menu:nat")),
     )
 
 
@@ -239,6 +249,7 @@ def controller_keyboard(user_id: int | None = None) -> list[dict]:
             callback_button(NRS_LINK_BUTTON, "menu:nrs"),
         ),
         row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
+        row(callback_button(NATIONAL_BUTTON, "menu:nat")),
     )
 
 
@@ -249,6 +260,7 @@ def controller_menu_text() -> str:
         "   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
         f"👤 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ\n"
         f"🔎 <b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
+        f"🏛 <b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО (НОСТРОЙ и НОПРИЗ)\n"
         "❓ Бланки и документы для проверки — команда /info\n\n"
         "<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
         f"{OFFICIAL_SOURCE_DISCLAIMER}"
@@ -736,6 +748,7 @@ def welcome_text() -> str:
 <b>{SEARCH_ORG}</b> — ИНН или название по всем 15 СРО
 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ
 <b>{SPECIALIST_BUTTON}</b> — в какой организации указан
+<b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО, не только у 15 партнёров
 
 {OFFICIAL_SOURCE_DISCLAIMER}"""
 
@@ -763,6 +776,19 @@ def open_specialist(user_id: int) -> None:
     clear_await_inn(user_id)
     clear_joiner_activity_await(user_id)
     send(user_id, format_specialist_intro(), kb(back_main_row()))
+
+
+def national_result_keyboard(result) -> list[dict]:
+    rows = [row(callback_button(button.label, button.payload)) for button in result.buttons]
+    rows.append(back_main_row())
+    return kb(*rows)
+
+
+def open_national(user_id: int) -> None:
+    prepare_national(user_id)
+    clear_await_inn(user_id)
+    clear_joiner_activity_await(user_id)
+    send(user_id, format_national_intro(), kb(back_main_row()))
 
 
 def nrs_result_keyboard(query: str) -> list[dict]:
@@ -1021,6 +1047,17 @@ def handle_callback(user_id: int, payload: str, update: dict) -> None:
     if payload == "menu:spec":
         open_specialist(user_id)
         return
+    if payload == "menu:nat":
+        open_national(user_id)
+        return
+    if payload.startswith("nat:"):
+        try:
+            text = national_reestr.load_member_text(payload)
+        except Exception:
+            logging.exception("карточка НОСТРОЙ/НОПРИЗ")
+            text = CARD_FAIL
+        send(user_id, text, kb(back_main_row()))
+        return
     if payload == "menu:restart":
         clear_user_sro(user_id)
         send_welcome(user_id, update)
@@ -1157,6 +1194,14 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
             send_question_reply(user_id, user_text)
             return
         handle_universal_search(user_id, user_text)
+        return
+    if mode == "national":
+        try:
+            result = national_reestr.search_members(user_text)
+        except Exception:
+            logging.exception("поиск НОСТРОЙ/НОПРИЗ")
+            result = error_result()
+        send(user_id, result.text, national_result_keyboard(result))
         return
     if mode == "specialist":
         send(user_id, format_search_reply(user_text), kb(back_main_row()))

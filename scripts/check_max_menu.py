@@ -165,6 +165,7 @@ def check_menu_routes() -> None:
             ("menu:controller", "Меню контролёра"),
             ("menu:nrs", "НРС"),
             ("menu:spec", "ФИО"),
+            ("menu:nat", "НОСТРОЙ"),
             ("faq:root", "FAQ"),
             ("faq:join", "Для вступающих"),
             ("faq:members", "Действующим членам"),
