@@ -125,6 +125,7 @@ from bot_core import (
     prepare_controller_menu,
     prepare_faq,
     prepare_main_menu,
+    prepare_national,
     prepare_nrs,
     prepare_search,
     prepare_specialist,
@@ -145,6 +146,14 @@ from partners_data import (
 )
 from sro_contacts import SRO_CONTACTS, format_sro_contacts, match_sro_contact_query
 from users_log import format_users_report, is_bot_admin, touch_user, users_count
+import national_reestr
+from national_reestr import (
+    CARD_FAIL,
+    NATIONAL_BUTTON,
+    error_result,
+    format_intro as format_national_intro,
+    is_national_mode,
+)
 from nrs_search_links import (
     NRS_LINK_BUTTON,
     can_use_nrs_link_pilot,
@@ -1740,6 +1749,7 @@ def _is_reply_menu_button(user_text: str) -> bool:
         SEARCH_ORG_BUTTON,
         NRS_LINK_BUTTON,
         SPECIALIST_BUTTON,
+        NATIONAL_BUTTON,
         "❓ Полезная информация",
         "❓ Назад в Полезное",
         BTN_FAQ_ASSOC_HUB,
@@ -1973,6 +1983,7 @@ def get_controller_keyboard(chat_id: int | None = None):
     btn_nrs = types.KeyboardButton(NRS_LINK_BUTTON)
     keyboard.add(btn_search, btn_nrs)
     keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
+    keyboard.add(types.KeyboardButton(NATIONAL_BUTTON))
     return keyboard
 
 
@@ -1992,6 +2003,7 @@ def get_main_keyboard(chat_id: int | None = None):
     else:
         keyboard.add(btn_search)
     keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
+    keyboard.add(types.KeyboardButton(NATIONAL_BUTTON))
     return keyboard
 
 
@@ -2075,6 +2087,7 @@ def controller_menu_text() -> str:
         f"   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
         f"👤 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ\n"
         f"🔎 <b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
+        f"🏛 <b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО (НОСТРОЙ и НОПРИЗ)\n"
         f"❓ Бланки и документы для проверки — команда /info\n\n"
         f"<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
         f"{OFFICIAL_SOURCE_DISCLAIMER}"
@@ -2102,6 +2115,43 @@ def get_specialist_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.add(types.KeyboardButton(BACK_TO_MENU_BUTTON))
     return keyboard
+
+
+def get_national_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add(types.KeyboardButton(BACK_TO_MENU_BUTTON))
+    return keyboard
+
+
+def open_national_search(chat_id: int) -> None:
+    prepare_national(chat_id)
+    clear_await_inn(chat_id)
+    clear_joiner_activity_await(chat_id)
+    finish_button_reply(
+        chat_id,
+        format_national_intro(),
+        reply_markup=get_national_keyboard(),
+    )
+
+
+def _send_national_result(chat_id: int, result) -> None:
+    if result.buttons:
+        markup = types.InlineKeyboardMarkup()
+        for button in result.buttons:
+            markup.add(
+                types.InlineKeyboardButton(
+                    text=button.label,
+                    callback_data=button.payload,
+                )
+            )
+    else:
+        markup = get_national_keyboard()
+    finish_button_reply(
+        chat_id,
+        result.text,
+        reply_markup=markup,
+        disable_web_page_preview=True,
+    )
 
 
 def open_specialist_search(chat_id: int) -> None:
@@ -2349,6 +2399,7 @@ def send_welcome(message):
 <b>{SEARCH_ORG_BUTTON}</b> — ИНН или название по всем 15 СРО
 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ
 <b>{SPECIALIST_BUTTON}</b> — в какой организации указан
+<b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО, не только у 15 партнёров
 
 {OFFICIAL_SOURCE_DISCLAIMER}"""
 
@@ -2485,7 +2536,7 @@ def send_update_notice_command(message):
 @log_errors
 def send_help(message):
     prepare_main_menu(message.chat.id)
-    help_text = """ℹ️ <b>Справка по боту</b>
+    help_text = f"""ℹ️ <b>Справка по боту</b>
 
 <b>Команды</b> (кнопка Menu слева от поля ввода):
 /start — главное меню (ИНН или поиск)
@@ -2499,6 +2550,7 @@ def send_help(message):
 🔍 Поиск организации — ИНН или название, план проверки и реестр
 👤 Проверить в НРС — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ
 🔎 Поиск специалиста по ФИО — организация, где человек указан в НРС
+{NATIONAL_BUTTON} — организация по ИНН, ОГРН или названию в едином реестре всех СРО
 /info — выписка, НОК, изменения в реестре, FAQ и бланки
 Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
 /start — другой ИНН или без ИНН: сбросить организацию и начать заново
@@ -2625,6 +2677,15 @@ def handle_text(message):
         )
         return
 
+    if is_national_mode(message.chat.id) and not _is_reply_menu_button(user_text):
+        try:
+            result = national_reestr.search_members(user_text)
+        except Exception:
+            logging.exception("поиск НОСТРОЙ/НОПРИЗ")
+            result = error_result()
+        _send_national_result(message.chat.id, result)
+        return
+
     if try_nrs_text_reply(message.chat.id, user_text):
         return
 
@@ -2673,6 +2734,10 @@ def handle_text(message):
 
     if user_text == SPECIALIST_BUTTON:
         open_specialist_search(message.chat.id)
+        return
+
+    if user_text == NATIONAL_BUTTON:
+        open_national_search(message.chat.id)
         return
 
     if user_text == NRS_LINK_BUTTON:
@@ -3557,6 +3622,24 @@ def handle_ctxnav_callbacks(call):
     safe_send_message(chat_id, "Неизвестная команда.", reply_markup=get_main_keyboard(chat_id))
 
 
+@bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("nat:"))
+@log_errors
+def handle_national_pick(call):
+    safe_answer_callback(call.id, "Открываю карточку…")
+    chat_id = call.message.chat.id
+    try:
+        text = national_reestr.load_member_text(call.data)
+    except Exception:
+        logging.exception("карточка НОСТРОЙ/НОПРИЗ")
+        text = CARD_FAIL
+    finish_button_reply(
+        chat_id,
+        text,
+        reply_markup=get_national_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("search_inn:"))
 @log_errors
 def handle_inline_search(call):
@@ -3589,7 +3672,7 @@ def handle_inline_search(call):
         safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.13.5"
+    BOT_VERSION = "1.14.0"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 

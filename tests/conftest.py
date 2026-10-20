@@ -35,6 +35,7 @@ import pytest  # noqa: E402
 import controller_access  # noqa: E402
 import feedback_log  # noqa: E402
 import local_answers  # noqa: E402
+import national_reestr  # noqa: E402
 import nrs_search_links  # noqa: E402
 import reestr_sync  # noqa: E402
 import specialist_reestr  # noqa: E402
@@ -47,6 +48,7 @@ _STATE_CONTAINERS = (
     controller_access._controller_work_mode,
     nrs_search_links._await_nrs_query,
     specialist_reestr._await_specialist,
+    national_reestr._await_national,
     sro_context._user_context,
     sro_context._pending_sro_pick,
     sro_context._pickable_sro_cache,
@@ -62,6 +64,7 @@ _STATE_CONTAINERS = (
 def _reset_state() -> None:
     for container in _STATE_CONTAINERS:
         container.clear()
+    national_reestr.clear_hit_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +74,7 @@ def isolated_files(tmp_path, monkeypatch):
     monkeypatch.setattr(sro_context, "_CONTEXT_FILE", tmp_path / "user_sro_context_max.json")
     monkeypatch.setattr(nrs_search_links, "_MODE_FILE", str(tmp_path / "nrs_link_mode_max.json"))
     monkeypatch.setattr(specialist_reestr, "_MODE_FILE", str(tmp_path / "specialist_mode_max.json"))
+    monkeypatch.setattr(national_reestr, "_MODE_FILE", str(tmp_path / "national_mode_max.json"))
     monkeypatch.setattr(specialist_reestr, "_db_path_override", str(tmp_path / "specialists.sqlite"))
     monkeypatch.setattr(feedback_log, "FEEDBACK_FILE", tmp_path / "feedback_questions.jsonl")
     monkeypatch.setattr(reestr_sync, "CACHE_FILE", str(tmp_path / "reestr_cache.json"))
