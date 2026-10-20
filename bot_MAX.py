@@ -122,7 +122,6 @@ from sro_context import (
     RESTART_ORG_BUTTON,
     SKIP_ONBOARDING_BUTTON,
     apply_context_from_memberships,
-    begin_await_inn,
     begin_joiner_activity_pick,
     begin_joiner_sro_pick,
     clear_await_inn,
@@ -730,18 +729,13 @@ MAX_START_HINTS = frozenset({
 
 
 def welcome_text() -> str:
-    return f"""👋 <b>Помощник СРО</b> — бот реестра и сервисов для членов <b>15 строительных СРО</b>.
+    return f"""👋 <b>Добро пожаловать в чат-бот реестра и сервисов СРО!</b>
 
-<b>Что умеет:</b> поиск организации по ИНН, план проверок, бланки, FAQ. Контролёрам — /controller.
+🕐 Работает <b>24/7</b> для членов и кураторов <b>15 партнёрских СРО</b>.
 
-<b>С чего начать</b> (кнопки <i>под этим сообщением</i>):
-• <b>ИНН</b> (10 или 12 цифр) — карточка в реестре
-• <b>{SEARCH_ORG}</b> — поиск по названию
-• <b>{SPECIALIST_BUTTON}</b> — специалист НРС и его организация
-• <b>Пропустить</b> — если только вступаете в СРО
-• <b>Справка</b> — команды и подсказки
-
-Команды: /start · /help · /search · /fio · /info
+<b>{SEARCH_ORG}</b> — ИНН или название по всем 15 СРО
+<b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ
+<b>{SPECIALIST_BUTTON}</b> — в какой организации указан
 
 {OFFICIAL_SOURCE_DISCLAIMER}"""
 
@@ -750,11 +744,7 @@ def send_welcome(user_id: int, update: dict) -> None:
     touch_user(fake_message(user_id, update), event="start")
     prepare_welcome_reset(user_id)
     clear_onboarding_flags(user_id)
-    begin_await_inn(user_id)
-    hint = ""
-    if is_controller(user_id):
-        hint = "<i>Контролёрам: служебное меню — /controller</i>\n\n"
-    send(user_id, hint + welcome_text(), onboarding_keyboard(user_id))
+    send(user_id, welcome_text(), main_keyboard(user_id))
 
 
 def open_controller_menu(user_id: int) -> None:
