@@ -224,30 +224,23 @@ def row(*buttons: dict) -> list[dict]:
 def main_keyboard(user_id: int) -> list[dict]:
     if is_controller_work_mode(user_id):
         return controller_keyboard(user_id)
-    rows = [
-        row(callback_button(SEARCH_ORG, "menu:search")),
-        row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
-    ]
-    if get_user_sro_id(user_id) or get_user_context(user_id):
-        rows.append(row(callback_button(RESTART_ORG_BUTTON, "menu:restart")))
-    if is_controller(user_id):
-        rows.append(row(callback_button("👋 Меню контролёра", "menu:controller")))
-    rows.append(row(callback_button("ℹ️ Справка", "menu:help")))
-    return kb(*rows)
-
-
-def controller_keyboard(user_id: int | None = None) -> list[dict]:
-    rows = [
+    return kb(
         row(
             callback_button(SEARCH_ORG, "menu:search"),
             callback_button(NRS_LINK_BUTTON, "menu:nrs"),
         ),
         row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
-    ]
-    if user_id is not None and get_user_sro_id(user_id):
-        rows.append(row(callback_button(RESTART_ORG_BUTTON, "menu:restart")))
-    rows.append(row(callback_button("ℹ️ Справка", "menu:help")))
-    return kb(*rows)
+    )
+
+
+def controller_keyboard(user_id: int | None = None) -> list[dict]:
+    return kb(
+        row(
+            callback_button(SEARCH_ORG, "menu:search"),
+            callback_button(NRS_LINK_BUTTON, "menu:nrs"),
+        ),
+        row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
+    )
 
 
 def controller_menu_text() -> str:

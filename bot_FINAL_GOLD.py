@@ -1973,17 +1973,15 @@ def get_controller_keyboard(chat_id: int | None = None):
     btn_nrs = types.KeyboardButton(NRS_LINK_BUTTON)
     keyboard.add(btn_search, btn_nrs)
     keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
-    if chat_id is not None and get_user_sro_id(chat_id):
-        keyboard.add(types.KeyboardButton(RESTART_ORG_BUTTON))
     return keyboard
 
 
 def get_main_keyboard(chat_id: int | None = None):
     """Главное меню: поиск организации, НРС, специалист по ФИО.
 
-    «Полезная информация» и «Сменить СРО / ИНН» с клавиатуры убраны.
-    Раздел FAQ по-прежнему открывается командой /info, смена контекста —
-    с экрана бланков.
+    «Полезная информация», «Сменить СРО / ИНН» и «Другой ИНН / без ИНН»
+    с клавиатуры убраны. FAQ — /info, сброс организации — /start,
+    смена контекста — с экрана бланков.
     """
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     btn_search = types.KeyboardButton(SEARCH_ORG_BUTTON)
@@ -2515,7 +2513,7 @@ def send_help(message):
 🔎 Поиск специалиста по ФИО — организация, где человек указан в НРС
 /info — выписка, НОК, изменения в реестре, FAQ и бланки
 Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
-🔄 Другой ИНН / без ИНН — сбросить организацию и начать заново (как /start)
+/start — другой ИНН или без ИНН: сбросить организацию и начать заново
 
 <i>Можно просто ввести ИНН или часть названия компании — бот найдёт организацию.</i>"""
     bot.send_message(
