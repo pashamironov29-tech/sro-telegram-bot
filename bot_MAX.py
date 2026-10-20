@@ -190,7 +190,7 @@ HELP_TEXT = """ℹ️ <b>Справка — Помощник СРО</b>
 
 🔍 Поиск — ИНН или часть названия по 15 СРО
 🔎 Поиск специалиста по ФИО — организация, где человек указан в НРС
-❓ Полезная информация — FAQ и бланки
+/info — FAQ и бланки
 Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
 
 <i>Можно сразу ввести ИНН или название компании.</i>"""
@@ -227,7 +227,6 @@ def main_keyboard(user_id: int) -> list[dict]:
     rows = [
         row(callback_button(SEARCH_ORG, "menu:search")),
         row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
-        row(callback_button("❓ Полезная информация", "menu:info")),
     ]
     if get_user_sro_id(user_id) or get_user_context(user_id):
         rows.append(row(callback_button(RESTART_ORG_BUTTON, "menu:restart")))
@@ -244,7 +243,6 @@ def controller_keyboard(user_id: int | None = None) -> list[dict]:
             callback_button(NRS_LINK_BUTTON, "menu:nrs"),
         ),
         row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
-        row(callback_button("❓ Полезная информация", "menu:info")),
     ]
     if user_id is not None and get_user_sro_id(user_id):
         rows.append(row(callback_button(RESTART_ORG_BUTTON, "menu:restart")))
@@ -259,7 +257,7 @@ def controller_menu_text() -> str:
         "   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
         f"👤 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ\n"
         f"🔎 <b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
-        "❓ <b>Полезная информация</b> — бланки, документы для проверки\n\n"
+        "❓ Бланки и документы для проверки — команда /info\n\n"
         "<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
         f"{OFFICIAL_SOURCE_DISCLAIMER}"
     )

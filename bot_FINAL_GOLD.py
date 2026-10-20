@@ -1971,30 +1971,29 @@ def get_controller_keyboard(chat_id: int | None = None):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     btn_search = types.KeyboardButton(SEARCH_ORG_BUTTON)
     btn_nrs = types.KeyboardButton(NRS_LINK_BUTTON)
-    btn_info = types.KeyboardButton("❓ Полезная информация")
     keyboard.add(btn_search, btn_nrs)
     keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
-    keyboard.add(btn_info)
     if chat_id is not None and get_user_sro_id(chat_id):
         keyboard.add(types.KeyboardButton(RESTART_ORG_BUTTON))
     return keyboard
 
 
 def get_main_keyboard(chat_id: int | None = None):
+    """Главное меню: поиск организации, НРС, специалист по ФИО.
+
+    «Полезная информация» и «Сменить СРО / ИНН» с клавиатуры убраны.
+    Раздел FAQ по-прежнему открывается командой /info, смена контекста —
+    с экрана бланков.
+    """
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     btn_search = types.KeyboardButton(SEARCH_ORG_BUTTON)
     btn_nrs = types.KeyboardButton(NRS_LINK_BUTTON)
-    btn_info = types.KeyboardButton("❓ Полезная информация")
     show_nrs = chat_id is None or can_use_nrs_link_pilot(chat_id, get_user_sro_id(chat_id))
     if show_nrs:
         keyboard.add(btn_search, btn_nrs)
     else:
         keyboard.add(btn_search)
     keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
-    keyboard.add(btn_info)
-    if chat_id is not None:
-        if should_show_change_context_button(chat_id):
-            keyboard.add(types.KeyboardButton(CHANGE_CONTEXT_BUTTON))
     return keyboard
 
 
@@ -2078,8 +2077,7 @@ def controller_menu_text() -> str:
         f"   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
         f"👤 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ\n"
         f"🔎 <b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
-        f"❓ <b>Полезная информация</b> — бланки, документы для проверки\n\n"
-        f"<i>Контекст СРО для бланков — по ИНН или «{CHANGE_CONTEXT_BUTTON}».</i>\n"
+        f"❓ Бланки и документы для проверки — команда /info\n\n"
         f"<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
         f"{OFFICIAL_SOURCE_DISCLAIMER}"
     )
@@ -2148,7 +2146,7 @@ def _context_ready_text(chat_id: int) -> str:
         f"✅ Контекст: <b>{prof['short_title']}</b> ({act})\n\n"
         "План проверок и бланки — <b>по вашему СРО</b>.\n\n"
         "📋 Нужны бланки для проверки?\n"
-        "«❓ Полезная информация» → «📋 Проверяемые документы»."
+        "Команда /info → «📋 Проверяемые документы»."
     )
 
 def _open_org_search(chat_id: int, *, intro: str | None = None) -> None:
@@ -2515,7 +2513,7 @@ def send_help(message):
 🔍 Поиск организации — ИНН или название, план проверки и реестр
 👤 Проверить в НРС — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ
 🔎 Поиск специалиста по ФИО — организация, где человек указан в НРС
-❓ Полезная информация — выписка, НОК, изменения в реестре, FAQ
+/info — выписка, НОК, изменения в реестре, FAQ и бланки
 Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
 🔄 Другой ИНН / без ИНН — сбросить организацию и начать заново (как /start)
 
@@ -3605,7 +3603,7 @@ def handle_inline_search(call):
         safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.13.3"
+    BOT_VERSION = "1.13.4"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 
