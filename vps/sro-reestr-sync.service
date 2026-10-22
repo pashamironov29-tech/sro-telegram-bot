@@ -2,6 +2,8 @@
 Description=SRO GOLD nightly reestr sync (list + refresh inspections)
 After=network-online.target
 Wants=network-online.target
+# Падение и TimeoutStartSec. Шаблон не включает сам себя.
+OnFailure=sro-sync-alert@%p.service
 
 [Service]
 Type=oneshot

@@ -2,6 +2,8 @@
 Description=SRO GOLD nightly specialist sync (NRS on member cards)
 After=network-online.target
 Wants=network-online.target
+# Падение и TimeoutStartSec. Шаблон не включает сам себя.
+OnFailure=sro-sync-alert@%p.service
 
 [Service]
 Type=oneshot
@@ -12,6 +14,10 @@ ExecStart=/bin/bash /opt/sro-bot/vps/specialist_daily_sync.sh
 Nice=10
 # Первый проход ~8 тысяч карточек, дальше короче
 TimeoutStartSec=6h
+# Пороги пустых карточек, число копий и серия 429/403 — из окружения.
+# По умолчанию в коде: SPECIALIST_EMPTY_RATIO=0.20 SPECIALIST_EMPTY_MIN=10
+# SPECIALIST_EMPTY_TOTAL_RATIO=0.20 SPECIALIST_EMPTY_TOTAL_MIN=10
+# SPECIALIST_BACKUP_KEEP=7 SPECIALIST_BLOCK_STREAK=5
 # SPECIALIST_ALLOW_PRUNE сюда насовсем не класть: ночной синк тогда
 # будет удалять членов при каждом коротком списке.
 # Разовое удаление: python specialist_sync.py --allow-prune CODE

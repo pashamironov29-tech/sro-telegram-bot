@@ -1,0 +1,13 @@
+[Unit]
+Description=Telegram alert when an SRO sync unit fails (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=srobot
+Group=srobot
+WorkingDirectory=/opt/sro-bot
+# %i — имя юнита без .service (OnFailure=sro-sync-alert@%p.service).
+# Своего OnFailure нет: иначе алерт об алерте зациклится.
+ExecStart=/bin/bash /opt/sro-bot/vps/sync_failure_alert.sh %i
