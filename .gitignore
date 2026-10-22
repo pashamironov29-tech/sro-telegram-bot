@@ -29,6 +29,7 @@ reestr_cache.json.bak
 specialists.sqlite
 specialists.sqlite-wal
 specialists.sqlite-shm
+specialists_backups/
 specialist_mode.json
 specialist_mode_*.json
 national_mode.json

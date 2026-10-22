@@ -42,8 +42,10 @@ chmod +x "$APP_DIR/vps/reestr_daily_sync.sh" 2>/dev/null || true
 cp "$APP_DIR/vps/sro-reestr-sync.service" /etc/systemd/system/sro-reestr-sync.service
 cp "$APP_DIR/vps/sro-reestr-sync.timer" /etc/systemd/system/sro-reestr-sync.timer
 chmod +x "$APP_DIR/vps/specialist_daily_sync.sh" 2>/dev/null || true
+chmod +x "$APP_DIR/vps/sync_failure_alert.sh" 2>/dev/null || true
 cp "$APP_DIR/vps/sro-specialist-sync.service" /etc/systemd/system/sro-specialist-sync.service
 cp "$APP_DIR/vps/sro-specialist-sync.timer" /etc/systemd/system/sro-specialist-sync.timer
+cp "$APP_DIR/vps/sro-sync-alert@.service" /etc/systemd/system/sro-sync-alert@.service
 systemctl daemon-reload
 systemctl enable sro-bot
 systemctl enable sro-max-bot
@@ -68,3 +70,4 @@ echo "  6) Ночной sync: systemctl list-timers sro-reestr-sync.timer"
 echo "     Логи: /opt/sro-bot/logs/reestr_daily_*.log"
 echo "  7) Синк специалистов: systemctl list-timers sro-specialist-sync.timer"
 echo "     Логи: /opt/sro-bot/logs/specialist_sync_*.log"
+echo "     Падение синка реестра или специалистов: юнит sro-sync-alert@.service (OnFailure)"
