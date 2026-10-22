@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 import pytest
 import requests
@@ -881,6 +883,139 @@ def test_empty_list_on_empty_database_is_not_an_alert(tmp_path, monkeypatch, cap
         ) == 0
     assert alerts == []
     assert _empty_db_warnings(caplog)
+
+
+def _fixture(name: str) -> dict:
+    path = Path(__file__).resolve().parent / "fixtures" / name
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_nostroy_live_expert_shape_and_empty_buckets():
+    """Форма карточки НОСТРОЙ на 22.10.2026: id и is_highlighted, номер в number.
+
+    Пустые корзины при заполненной дате — тот же объект, без строк.
+    Отдельного поля под специалистов в таком ответе нет.
+    """
+    filled = _fixture("nostroy_member_experts.json")
+    rows = extract_specialists(filled)
+    assert rows == [
+        {
+            "fio": "Сидоров Пётр Сергеевич",
+            "fio_norm": "сидоров петр сергеевич",
+            "nrs_number": "С-77-100001",
+            "category": "Специалист · Особо-опасные работы",
+        }
+    ]
+
+    empty = _fixture("nostroy_member_experts_empty.json")
+    assert empty["experts_by_category"] == {"regular": [], "danger": [], "other": []}
+    assert empty["last_updated_experts_at_date_time_string"]
+    assert extract_specialists(empty) == []
+
+
+def test_empty_published_experts_keep_rows_and_exit_zero(tmp_path, monkeypatch, caplog):
+    """Дата специалистов есть, корзины пустые: старые ФИО остаются, код 0, без алерта."""
+    import specialist_sync
+
+    alerts: list[str] = []
+    monkeypatch.setattr(specialist_sync, "notify_admins", alerts.append, raising=False)
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(_ListApi([1, 2]))
+    ) == 0
+    assert search_people("сидоров", db=db).status == "ok"
+
+    empty = _fixture("nostroy_member_experts_empty.json")
+
+    class _EmptyExperts(_ListApi):
+        def __call__(self, url, body, timeout):
+            self.calls.append((url, body))
+            if url.endswith("/member/list"):
+                rows = [
+                    _nostroy_row(member_id, stamp="16.10.2026 00:00:00")
+                    for member_id in self.member_ids
+                ]
+                return 200, {
+                    "success": True,
+                    "data": {"count": len(rows), "countPages": 1, "data": rows},
+                }
+            if url.endswith("/member/1/info"):
+                card = dict(empty)
+                card["id"] = 1
+                return 200, {"success": True, "data": card}
+            return _ListApi.__call__(self, url, body, timeout)
+
+    alerts.clear()
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="specialist_sync"):
+        rc = sync_all(
+            db_path=db,
+            codes=["OGPS"],
+            fresh=True,
+            client=_client(_EmptyExperts([1, 2])),
+        )
+    assert rc == 0
+    assert alerts == []
+    assert search_people("сидоров", db=db).status == "ok"
+    assert search_people("иванова", db=db).status == "ok"
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "не стираю" in record.getMessage()
+    ]
+    assert warnings == [
+        "OGPS: членов с датой специалистов и пустыми списками "
+        "в карточке: 1. Старых строк специалистов не стираю"
+    ]
+
+    filled = _fixture("nostroy_member_experts.json")
+    filled["experts_by_category"]["regular"][0]["fio"] = "Орлова Анна Сергеевна"
+    filled["experts_by_category"]["danger"] = []
+
+    class _Restored(_EmptyExperts):
+        def __call__(self, url, body, timeout):
+            self.calls.append((url, body))
+            if url.endswith("/member/1/info"):
+                card = dict(filled)
+                card["id"] = 1
+                card["experts_by_category"] = filled["experts_by_category"]
+                return 200, {"success": True, "data": card}
+            return _EmptyExperts.__call__(self, url, body, timeout)
+
+    # Отпечаток списка тот же, строк в базе больше нуля — карточку не качаем.
+    # Новый отпечаток снова приносит строки: пишем их вместо старых.
+    assert sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_Restored([1, 2])),
+    ) == 0
+    assert search_people("сидоров", db=db).status == "ok"
+
+    class _RestoredNewStamp(_Restored):
+        def __call__(self, url, body, timeout):
+            if url.endswith("/member/list"):
+                self.calls.append((url, body))
+                rows = [
+                    _nostroy_row(member_id, stamp="22.10.2026 00:00:00")
+                    for member_id in self.member_ids
+                ]
+                return 200, {
+                    "success": True,
+                    "data": {"count": len(rows), "countPages": 1, "data": rows},
+                }
+            return _Restored.__call__(self, url, body, timeout)
+
+    assert sync_all(
+        db_path=db,
+        codes=["OGPS"],
+        fresh=True,
+        client=_client(_RestoredNewStamp([1, 2])),
+    ) == 0
+    assert search_people("сидоров", db=db).status == "none"
+    restored = search_people("орлова", db=db)
+    assert restored.status == "ok"
+    assert "С-77-100001" in format_search_reply("орлова", db=db)
 
 
 def test_timeout_is_retried():

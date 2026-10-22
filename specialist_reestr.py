@@ -5,9 +5,12 @@
   https://reestr.nostroy.ru  и  https://reestr.nopriz.ru
 
 Карточка члена:
-  НОСТРОЙ — поле experts_by_category;
+  НОСТРОЙ — поле experts_by_category (корзины regular / danger / other).
+  В строке с октября 2026 есть id и is_highlighted, для поиска нужны fio
+  и number. Пустые корзины при заполненной дате специалистов — не другой
+  адрес, а карточка без строк: уже лежащих специалистов синк не стирает.
   НОПРИЗ — поля experts_by_category нет, специалисты в specialists_data
-  (те же корзины regular / danger / other, номер в registration_number).
+  (те же корзины, номер в registration_number).
 
 Синхронизацию делает specialist_sync.py. Этот модуль только читает SQLite
 и отвечает на запрос. Файл базы в git не кладётся.
@@ -266,9 +269,12 @@ def _category_of(item: dict, bucket: str) -> str:
 
 
 def extract_specialists(card: dict) -> list[dict]:
-    """Специалисты из карточки. Нет поля — пустой список, не ошибка.
+    """Специалисты из карточки. Нет поля или пустые корзины — пустой список.
 
     НОСТРОЙ: experts_by_category, номер в number.
+    Живая строка (22.10.2026): id, is_highlighted, expert_type, fio, number.
+    id и is_highlighted в базу не пишем. Пустые regular/danger/other — это
+    пустая карточка, не повод искать другое поле.
     НОПРИЗ: specialists_data, номер в registration_number.
     """
     if not isinstance(card, dict):
@@ -398,10 +404,14 @@ def save_member(
     *,
     run_id: str,
     updated_at: str,
+    keep_specialists_if_empty: bool = False,
 ) -> int:
     """Перезаписать члена и его специалистов. Вернуть, сколько строк специалистов.
 
     Пустая карточка не трогает ни члена, ни специалистов.
+    keep_specialists_if_empty: в карточке нет строк, но у члена они уже лежат
+    (НОСТРОЙ отдал пустые корзины при дате специалистов). Члена обновляем,
+    специалистов не удаляем. Если строки в карточке есть — пишем их как обычно.
     """
     if not card_has_substance(card):
         return 0
@@ -414,6 +424,7 @@ def save_member(
         director = str(director or "")
     director = director.strip()
     specs = extract_specialists(card)
+    keep_existing = keep_specialists_if_empty and not specs
     conn.execute(
         """
         INSERT INTO members (
@@ -449,10 +460,11 @@ def save_member(
             updated_at,
         ),
     )
-    conn.execute(
-        "DELETE FROM specialists WHERE registry=? AND member_id=?",
-        (target.registry, member_id),
-    )
+    if not keep_existing:
+        conn.execute(
+            "DELETE FROM specialists WHERE registry=? AND member_id=?",
+            (target.registry, member_id),
+        )
     for spec in specs:
         conn.execute(
             """

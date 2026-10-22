@@ -1,0 +1,29 @@
+{
+  "id": 1,
+  "inn": "7700000001",
+  "short_description": "ООО Номер 1",
+  "member_status": {"id": 1, "code": "1", "title": "Является членом"},
+  "director": "Генеральный директор Иванов Иван Иванович",
+  "last_updated_experts_at_date_time_string": "12.10.2026 18:23:38",
+  "experts_by_category": {
+    "regular": [
+      {
+        "is_highlighted": false,
+        "id": 187573,
+        "expert_type": {"id": 1, "code": "regular", "title": "Специалист"},
+        "fio": "Сидоров Пётр Сергеевич",
+        "number": "C-77-100001"
+      }
+    ],
+    "danger": [
+      {
+        "is_highlighted": true,
+        "id": 187572,
+        "expert_type": {"id": 2, "code": "danger", "title": "Особо-опасные работы"},
+        "fio": "Сидоров Пётр Сергеевич",
+        "number": "C-77-100001"
+      }
+    ],
+    "other": []
+  }
+}
