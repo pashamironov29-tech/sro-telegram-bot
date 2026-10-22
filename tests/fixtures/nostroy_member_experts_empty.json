@@ -1,0 +1,14 @@
+{
+  "id": 1,
+  "inn": "7700000001",
+  "short_description": "ООО Номер 1",
+  "member_status": {"id": 1, "code": "1", "title": "Является членом"},
+  "director": "Генеральный директор Петров Пётр Петрович",
+  "last_updated_at_date_time_string": "06.08.2026 17:59:58",
+  "last_updated_experts_at_date_time_string": "02.10.2026 16:44:13",
+  "experts_by_category": {
+    "regular": [],
+    "danger": [],
+    "other": []
+  }
+}

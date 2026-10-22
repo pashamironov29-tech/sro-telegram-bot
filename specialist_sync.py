@@ -26,7 +26,16 @@
 
 НОСТРОЙ в списке отдаёт даты обновления — карточку с тем же отпечатком
 повторно не качаем. Исключение: дата специалистов в списке есть, а в базе
-у члена ни одной строки — карточку читаем снова. У НОПРИЗ в списке даты
+у члена ни одной строки — карточку читаем снова.
+
+С 16.10.2026 часть карточек НОСТРОЙ приходит с датой специалистов и пустыми
+списками experts_by_category (regular/danger/other). Отдельного публичного
+адреса для этих строк нет: страница члена показывает «Нет данных о
+специалистах». Такие пустые списки не стирают уже записанных специалистов
+и не роняют весь прогон. На СРО пишется одно предупреждение. Пока в базе
+строк нет, карточку с датой читаем снова — вдруг реестр снова отдаст ФИО.
+
+У НОПРИЗ в списке даты
 специалистов нет (specialists_update_date только в карточке), поэтому
 карточки НОПРИЗ читаем заново каждый полный запуск. Оборванный запуск
 продолжается сам: уже записанные в этом запуске члены пропускаются.
@@ -483,15 +492,13 @@ def sync_sro(
             card,
             run_id=run_id,
             updated_at=updated_at,
+            # Дата в списке есть, а строк в карточке нет — не затирать то,
+            # что уже лежит. Иначе один пустой ответ стирает НРС навсегда.
+            keep_specialists_if_empty=_expert_mark(row) and already > 0,
         )
         stats.specialists += saved
         if _expert_mark(row) and saved == 0:
             stats.empty_despite_date += 1
-            print(
-                f"{target.code}: член {member_id} с датой специалистов, "
-                "в карточке строк нет",
-                flush=True,
-            )
         conn.commit()
         stats.fetched += 1
         if index % 100 == 0 or index == stats.listed:
@@ -510,6 +517,14 @@ def sync_sro(
     else:
         stats.removed = prune_members(conn, target, seen, allow_prune=allow_prune)
     conn.commit()
+    if stats.empty_despite_date:
+        message = (
+            f"{target.code}: членов с датой специалистов и пустыми списками "
+            f"в карточке: {stats.empty_despite_date}. "
+            "Старых строк специалистов не стираю"
+        )
+        print(message, flush=True)
+        logging.getLogger(__name__).warning(message)
     print(
         f"{target.code}: готово, специалистов за этот проход {stats.specialists}, "
         f"пустых при дате специалистов {stats.empty_despite_date}, "
@@ -577,12 +592,7 @@ def sync_all(
                     resume=resume,
                     allow_prune=target.code.upper() in allowed,
                 )
-                if (
-                    stats.list_failed
-                    or stats.list_rejected
-                    or stats.too_many_card_errors
-                    or stats.empty_despite_date
-                ):
+                if stats.list_failed or stats.list_rejected or stats.too_many_card_errors:
                     failed.append(target.code)
         except Exception:
             # Запуск остаётся running — следующий старт его продолжит.
