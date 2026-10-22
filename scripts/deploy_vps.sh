@@ -2,6 +2,9 @@
 # Выкладка отслеживаемых файлов на VPS из GitHub Actions.
 # На сервере git нет: git archive на runner, затем rsync в /opt/sro-bot.
 # Боевой config_keys.py не читаем и не перезаписываем.
+# Каталог vps/ целиком не затираем. Живые юниты ставит
+# scripts/install_systemd_units.sh: в /etc/systemd/system и один
+# sync_failure_alert.sh. Синки и таймеры не перезапускаются.
 set -euo pipefail
 set +x
 
@@ -376,6 +379,79 @@ done
 EOS
 }
 
+install_units() {
+  local installer pack remote_tmp name rc
+  installer="$ROOT/scripts/install_systemd_units.sh"
+  pack=$(mktemp -d)
+  remote_tmp=""
+  rc=0
+  finish_units() {
+    local code=$1
+    rm -rf -- "$pack"
+    if [[ -n "$remote_tmp" ]]; then
+      remote "rm -rf -- ${remote_tmp}" || true
+    fi
+    return "$code"
+  }
+  if [[ ! -f "$installer" ]]; then
+    echo "нет scripts/install_systemd_units.sh"
+    finish_units 1
+    return
+  fi
+  cp -- "$installer" "$pack/install_systemd_units.sh"
+  chmod 755 "$pack/install_systemd_units.sh"
+  local names
+  names=$(bash "$installer" --list)
+  if [[ -z "$names" ]]; then
+    echo "пустой список юнитов"
+    finish_units 1
+    return
+  fi
+  while IFS= read -r name || [[ -n "$name" ]]; do
+    [[ -z "$name" ]] && continue
+    case "$name" in
+      config_keys.py|contacts_data.py|.env|.env.*|*.pem|*.key)
+        echo "в списке юнитов секрет: $name" >&2
+        finish_units 1
+        return
+        ;;
+      */*|.*|*..*)
+        echo "плохое имя юнита: $name" >&2
+        finish_units 1
+        return
+        ;;
+    esac
+    if [[ ! -f "$STAGE/vps/$name" ]]; then
+      echo "в архиве нет vps/$name" >&2
+      finish_units 1
+      return
+    fi
+    cp -- "$STAGE/vps/$name" "$pack/$name"
+  done <<<"$names"
+  remote_tmp=$(remote "mktemp -d /tmp/sro-units.XXXXXXXX") || rc=$?
+  remote_tmp=${remote_tmp//[[:space:]]/}
+  if [[ "$rc" -ne 0 || ! "$remote_tmp" =~ ^/tmp/sro-units\.[A-Za-z0-9]+$ ]]; then
+    echo "плохой временный каталог юнитов"
+    remote_tmp=""
+    finish_units 1
+    return
+  fi
+  if ! rsync -rlptz --checksum \
+    -e "$RSYNC_RSH" \
+    "${pack}/" \
+    "${VPS_USER}@${VPS_HOST}:${remote_tmp}/"; then
+    echo "не удалось передать юниты"
+    finish_units 1
+    return
+  fi
+  if ! remote "bash ${remote_tmp}/install_systemd_units.sh --source ${remote_tmp}"; then
+    echo "Юниты systemd не встали."
+    finish_units 1
+    return
+  fi
+  finish_units 0
+}
+
 fingerprint() {
   local path=$1
   local out
@@ -599,6 +675,8 @@ while IFS= read -r rel || [[ -n "$rel" ]]; do
 done < "$list"
 rm -rf -- "$PYTHONPYCACHEPREFIX"
 EOS
+
+install_units
 
 restart_out=$(remote_script <<'EOS'
 set -euo pipefail
