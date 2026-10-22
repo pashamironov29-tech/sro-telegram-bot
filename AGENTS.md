@@ -77,7 +77,7 @@ python vps/check_prod_sro_gate.py
 
 Push в `master` запускает `.github/workflows/deploy.yml`: тесты, затем environment `production`. Каталог на VPS — `/opt/sro-bot`, без git. Секреты Actions: `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`; по желанию `VPS_PORT` и `VPS_KNOWN_HOSTS`.
 
-Боевой `config_keys.py` не перезаписывать и не читать. Каталог `vps/` на сервере свой, выкладка его не трогает. Рестарт только `sro-bot` и `sro-max-bot` (таймеры подхватят код сами). Бэкапы заменённых файлов: `/opt/sro-bot/backups/auto-*`, последние 10.
+Боевой `config_keys.py` не перезаписывать и не читать. Каталог `vps/` целиком выкладка не затирает. Из него на сервер ставятся живые юниты в `/etc/systemd/system` и `sync_failure_alert.sh` в `/opt/sro-bot/vps/` (`scripts/install_systemd_units.sh`). Рестарт только `sro-bot` и `sro-max-bot`. Синки и их таймеры не перезапускаются, хватает `daemon-reload`. Бэкапы заменённых файлов: `/opt/sro-bot/backups/auto-*`, последние 10.
 
 Ручной откат: `cp -a /opt/sro-bot/backups/auto-…/files/. /opt/sro-bot/ && systemctl restart sro-bot sro-max-bot`.
 
