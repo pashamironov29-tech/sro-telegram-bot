@@ -205,3 +205,33 @@ def test_tg_page_button_routes(monkeypatch):
     text, markup = sent[-1]
     assert text == "люди natp:nostroy:10:2"
     assert markup.keyboard[0][0].callback_data == "natp:nostroy:10:3"
+
+
+def test_long_texts_fit_message_limit():
+    card = _nostroy_card(10)
+    for item in card["experts_by_category"]["regular"]:
+        item["fio"] = "Очень-Длинная-Фамилия " * 25
+        item["number"] = "С-77-" + "9" * 40
+    view = load_member_view("nat:nostroy:10", client=_client(_transport(card)))
+    assert len(view.text) <= national_reestr.MESSAGE_LIMIT
+    assert "не поместилось" in view.text
+    assert view.text.count("<b>") == view.text.count("</b>")
+
+
+def test_broken_people_block_keeps_card(monkeypatch):
+    def boom(*_a, **_k):
+        raise ValueError("bad")
+
+    monkeypatch.setattr(national_reestr, "format_people", boom)
+    text = load_member_view("nat:nostroy:10", client=_client(_transport(_nostroy_card(2)))).text
+    assert "Ромашка" in text and "не разобрался" in text
+
+
+def test_page_error_keeps_org_name():
+    national_reestr.remember(national_reestr.MemberHit("nostroy", 10, name="ООО Ромашка"))
+
+    def down(url, body, timeout):
+        raise requests.Timeout("timed out")
+
+    text = load_member_view("natp:nostroy:10:2", client=_client(down)).text
+    assert "ООО Ромашка" in text and national_reestr.PEOPLE_FAIL in text

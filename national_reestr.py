@@ -58,6 +58,7 @@ SEARCH_FAIL = (
 _CB_RE = re.compile(r"^nat:(nostroy|nopriz):(\d{1,12})$")
 _PAGE_CB_RE = re.compile(r"^natp:(nostroy|nopriz):(\d{1,12}):(\d{1,4})$")
 PEOPLE_PAGE = 10
+MESSAGE_LIMIT = 3900  # Telegram и MAX режут около 4000; запас под HTML
 PEOPLE_FAIL = (
     "Список специалистов сейчас не загрузился: реестр не ответил. "
     "Попробуйте позже или откройте карточку в реестре."
@@ -928,7 +929,7 @@ def _format_person(index: int, person: Person) -> str:
     line = f"{index}. <b>{_h(person.fio)}</b>"
     if person.number:
         line += f" — <code>{_h(person.number)}</code>"
-    extra = [part for part in (person.kind, person.work) if part]
+    extra = [part for part in (person.kind, _clip(person.work, 120)) if part]
     if person.added:
         extra.append(f"в списке с {person.added}")
     if extra:
@@ -954,6 +955,25 @@ def format_people(card, page: int = 1) -> tuple[str, int, int]:
     lines = [head]
     lines.extend(_format_person(start + i, p) for i, p in enumerate(shown, start=1))
     return "\n".join(lines), page, pages
+
+
+def fit_message(text: str) -> str:
+    """Не больше MESSAGE_LIMIT: срезаем хвостовые строки целиком, без порванных тегов."""
+    if len(text) <= MESSAGE_LIMIT:
+        return text
+    tail = "\n… не поместилось в сообщение — откройте карточку в реестре."
+    lines = text.split("\n")
+    while lines and len("\n".join(lines)) + len(tail) > MESSAGE_LIMIT:
+        lines.pop()
+    return "\n".join(lines) + tail
+
+
+def _safe_people(card, page: int) -> tuple[str, int, int]:
+    try:
+        return format_people(card, page)
+    except Exception:
+        log.warning("специалисты карточки не разобрались", exc_info=True)
+        return "👥 Специалисты НРС: список не разобрался. Откройте карточку в реестре.", 1, 1
 
 
 def _page_buttons(registry: str, member_id: int, page: int, pages: int) -> list[PickButton]:
@@ -992,14 +1012,16 @@ def _load_people_page(payload: str, *, client: RegistryClient | None) -> SearchR
     registry, member_id, page = parsed
     raw, exc = _post(client or make_client(), info_url(registry, member_id), {})
     data = raw.get("data") if isinstance(raw, dict) else None
-    if exc or not isinstance(data, dict):
-        return SearchResult(PEOPLE_FAIL)
     cached = cached_hit(registry, member_id)
+    if exc or not isinstance(data, dict):
+        if cached and cached.name:
+            return SearchResult(f"🏛 <b>{_h(cached.name)}</b>\n{PEOPLE_FAIL}")
+        return SearchResult(PEOPLE_FAIL)
     name = cached.name if cached else _org_name(data)
-    text, page, pages = format_people(data, page)
+    text, page, pages = _safe_people(data, page)
     if name:
         text = f"🏛 <b>{_h(name)}</b>\n{text}"
-    return SearchResult(text, _page_buttons(registry, member_id, page, pages))
+    return SearchResult(fit_message(text), _page_buttons(registry, member_id, page, pages))
 
 
 def _load_member_view(payload: str, *, client: RegistryClient | None) -> SearchResult:
@@ -1024,8 +1046,8 @@ def _load_member_view(payload: str, *, client: RegistryClient | None) -> SearchR
     hit = apply_card(cached, data) if cached else hit_from_card(registry, member_id, data)
     hit = _fill_sro_reg(own_client, hit)
     remember(hit)
-    people, page, pages = format_people(data, 1)
-    text = f"{format_member_card(hit)}\n\n{people}"
+    people, page, pages = _safe_people(data, 1)
+    text = fit_message(f"{format_member_card(hit)}\n\n{people}")
     return SearchResult(text, _page_buttons(registry, member_id, page, pages))
 
 
