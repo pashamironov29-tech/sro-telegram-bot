@@ -217,6 +217,7 @@ def test_search_by_inn_calls_both_registries_and_card():
 
 
 def test_several_matches_are_buttons_without_card_request():
+    national_reestr.clear_sro_cache()
     second = dict(NOSTROY_ROW)
     second["id"] = 12
     second["short_description"] = "ООО «Другая»"
@@ -233,14 +234,42 @@ def test_several_matches_are_buttons_without_card_request():
             return 200, _list_payload([NOSTROY_ROW, second], count=2)
         if url.endswith("/member/list"):
             return 200, _list_payload([], count=0)
+        if url.endswith("/sro/185"):
+            return 200, {
+                "success": True,
+                "data": {
+                    "id": 185,
+                    "short_description": "А «Пример»",
+                    "full_description": "Ассоциация «Пример»",
+                    "registration_number": "СРО-С-001-01012010",
+                },
+            }
+        if url.endswith("/sro/7"):
+            return 200, {
+                "success": True,
+                "data": {
+                    "id": 7,
+                    "short_description": "СРО «Вторая»",
+                    "full_description": "СРО Другая",
+                    "registration_number": "СРО-С-002-02022010",
+                },
+            }
         raise AssertionError(url)
 
     result = search_members("Ромашка", client=_client(transport))
     assert "найдено: 2" in result.text
-    assert "ООО" in result.text
+    assert "НОСТРОЙ" in result.text
+    assert "Ассоциация «Пример»" in result.text
+    assert "СРО-С-001-01012010" in result.text
+    assert "СРО-С-002-02022010" in result.text
+    assert [button.label for button in result.buttons] == [
+        "Ромашка · НОСТРОЙ · Пример",
+        "Другая · НОСТРОЙ · Вторая",
+    ]
     assert [button.payload for button in result.buttons] == ["nat:nostroy:10", "nat:nostroy:12"]
     assert calls[0].endswith("/api/sro/all/member/list")
     assert all("/info" not in url for url in calls)
+    assert any(url.endswith("/sro/185") for url in calls)
     assert calls[0] and "searchString" not in calls[0]
 
 
@@ -445,6 +474,229 @@ def test_tg_menu_has_button_and_handles_query(monkeypatch):
         )
     )
     assert sent[-1][0] == "карточка из кнопки"
+
+
+PATOK_NOSTROY = {
+    "id": 501,
+    "short_description": "ООО «ПАТОК»",
+    "full_description": "Общество с ограниченной ответственностью «ПАТОК»",
+    "inn": "9723088557",
+    "ogrnip": "1227700000001",
+    "member_status": {"id": 1, "code": "1", "title": "Является членом"},
+    "sro": {
+        "id": 87,
+        "full_description": "Ассоциация «Объединение генеральных подрядчиков в строительстве»",
+        "registration_number": "СРО-С-020-22072009",
+    },
+}
+
+PATOK_NOPRIZ = {
+    "id": 502,
+    "short_description": "ООО «Паток»",
+    "full_description": "Общество с ограниченной ответственностью «Паток»",
+    "inn": "9723088557",
+    "ogrnip": "1227700000001",
+    "member_status": {"id": 1, "code": "1", "title": "Является членом"},
+    "sro": {
+        "id": 372,
+        "full_description": 'Ассоциация "Объединение градостроительных проектных организаций"',
+        "registration_number": "СРО-П-196-14022018",
+    },
+}
+
+
+def _sro_card(short: str, full: str, reg: str) -> dict:
+    return {
+        "success": True,
+        "data": {
+            "short_description": short,
+            "full_description": full,
+            "registration_number": reg,
+        },
+    }
+
+
+def test_two_registries_show_sro_on_list_and_buttons():
+    national_reestr.clear_sro_cache()
+    calls = []
+
+    def transport(url, body, timeout):
+        calls.append(url)
+        if url.endswith("/member/list") and "nostroy" in url:
+            return 200, _list_payload([PATOK_NOSTROY], count=1)
+        if url.endswith("/member/list"):
+            return 200, _list_payload([PATOK_NOPRIZ], count=1)
+        if url.endswith("/sro/87"):
+            return 200, _sro_card(
+                "Ассоциация «Объединение генподрядчиков в строительстве»",
+                "Ассоциация «Объединение генеральных подрядчиков в строительстве»",
+                "СРО-С-020-22072009",
+            )
+        if url.endswith("/sro/372"):
+            return 200, _sro_card(
+                'Ассоциация "ОГПО"',
+                'Ассоциация "Объединение градостроительных проектных организаций"',
+                "СРО-П-196-14022018",
+            )
+        raise AssertionError(url)
+
+    result = search_members("9723088557", client=_client(transport))
+    assert "найдено: 2" in result.text
+    assert (
+        "1. ООО «ПАТОК» — Является членом — НОСТРОЙ · "
+        "Ассоциация «Объединение генеральных подрядчиков в строительстве» · "
+        "СРО-С-020-22072009"
+    ) in result.text
+    assert (
+        "2. ООО «Паток» — Является членом — НОПРИЗ · "
+        'Ассоциация "Объединение градостроительных проектных организаций" · '
+        "СРО-П-196-14022018"
+    ) in result.text
+    assert [button.label for button in result.buttons] == [
+        "ПАТОК · НОСТРОЙ · Объед. генподрядчиков",
+        "Паток · НОПРИЗ · ОГПО",
+    ]
+    assert [button.payload for button in result.buttons] == ["nat:nostroy:501", "nat:nopriz:502"]
+    for button in result.buttons:
+        assert len(button.label) <= 60
+        assert len(button.payload.encode("utf-8")) <= 64
+        assert "ПАТОК" not in button.payload
+        assert "ОГПО" not in button.payload
+    assert all("/member/" not in url or url.endswith("/member/list") for url in calls)
+    assert any(url.endswith("/sro/87") for url in calls)
+    assert any(url.endswith("/sro/372") for url in calls)
+
+
+def test_sro_card_failure_still_names_registry_and_full_sro():
+    national_reestr.clear_sro_cache()
+
+    def transport(url, body, timeout):
+        if url.endswith("/member/list") and "nostroy" in url:
+            return 200, _list_payload([PATOK_NOSTROY], count=1)
+        if url.endswith("/member/list"):
+            return 200, _list_payload([PATOK_NOPRIZ], count=1)
+        if "/sro/" in url:
+            raise requests.Timeout("timed out")
+        raise AssertionError(url)
+
+    result = search_members("9723088557", client=_client(transport))
+    assert "НОСТРОЙ" in result.text
+    assert "НОПРИЗ" in result.text
+    assert "СРО-С-020-22072009" in result.text
+    assert "СРО-П-196-14022018" in result.text
+    assert "Объединение генеральных подрядчиков в строительстве" in result.text
+    assert [button.label for button in result.buttons] == [
+        "ПАТОК · НОСТРОЙ · Объед. генеральных подрядчиков",
+        "Паток · НОПРИЗ · Объед. градостроительных проектных…",
+    ]
+    assert all(len(button.label) <= 60 for button in result.buttons)
+    assert [button.payload for button in result.buttons] == ["nat:nostroy:501", "nat:nopriz:502"]
+
+
+def test_short_name_on_the_list_row_skips_sro_request():
+    national_reestr.clear_sro_cache()
+    row = dict(PATOK_NOSTROY)
+    row["sro"] = dict(PATOK_NOSTROY["sro"])
+    row["sro"]["short_description"] = "Ассоциация «Объединение генподрядчиков в строительстве»"
+    calls = []
+
+    def transport(url, body, timeout):
+        calls.append(url)
+        if url.endswith("/member/list") and "nostroy" in url:
+            return 200, _list_payload([row], count=1)
+        if url.endswith("/member/list"):
+            return 200, _list_payload([PATOK_NOPRIZ], count=1)
+        if url.endswith("/sro/372"):
+            return 200, _sro_card(
+                'Ассоциация "ОГПО"',
+                'Ассоциация "Объединение градостроительных проектных организаций"',
+                "СРО-П-196-14022018",
+            )
+        raise AssertionError(url)
+
+    result = search_members("9723088557", client=_client(transport))
+    assert result.buttons[0].label == "ПАТОК · НОСТРОЙ · Объед. генподрядчиков"
+    assert all(not url.endswith("/sro/87") for url in calls)
+
+
+def test_button_uses_distinctive_sro_short_name():
+    cases = [
+        ("СРО Союз «МООСС»", "nostroy", "ООО «Альфа»", "Альфа · НОСТРОЙ · МООСС"),
+        ("Ассоциация СРО «МОС»", "nostroy", "ООО «Бета»", "Бета · НОСТРОЙ · МОС"),
+        (
+            "СРО А «Объединение строителей СПб»",
+            "nostroy",
+            "ИП Сидоров Сидор Сидорович",
+            "Сидоров Сидор Сидорович · НОСТРОЙ · Объед. строителей СПб",
+        ),
+        ("Ассоциация «Сахалинстрой»", "nopriz", "АО «Гамма»", "Гамма · НОПРИЗ · Сахалинстрой"),
+        (
+            "(СРО) Ассоциация «Томское проектное объединение»",
+            "nopriz",
+            "ООО «Дельта»",
+            "Дельта · НОПРИЗ · Томское проектное объединение",
+        ),
+    ]
+    for short, registry, org, expected in cases:
+        label = national_reestr.button_label(
+            MemberHit(
+                registry=registry,
+                member_id=1,
+                name=org,
+                sro_short=short,
+                status_code="1",
+                status_title="Является членом",
+            )
+        )
+        assert label == expected
+        assert len(label) <= 60
+
+
+def test_long_button_keeps_registry_and_callback_short():
+    hit = MemberHit(
+        registry="nostroy",
+        member_id=10**12 - 1,
+        name="ООО «" + ("Оченьдлинноеназвание" * 4) + "»",
+        sro_name="Ассоциация «" + ("Длинное имя саморегулируемой организации " * 4) + "»",
+        sro_short="Ассоциация «Объединение генподрядчиков в строительстве и ещё много лишних слов»",
+        sro_reg="СРО-С-020-22072009",
+        status_title="Является членом",
+        status_code="1",
+    )
+    label = national_reestr.button_label(hit)
+    assert "НОСТРОЙ" in label
+    assert len(label) <= 60
+    assert label.index("НОСТРОЙ") < label.rindex("·")
+    payload = national_reestr.callback_payload(hit)
+    assert payload == "nat:nostroy:999999999999"
+    assert len(payload.encode("utf-8")) <= 64
+    text = national_reestr.format_member_list("запрос <b>", [hit], 1)
+    assert "НОСТРОЙ" in text
+    assert "СРО-С-020-22072009" in text
+    assert "запрос &lt;b&gt;" in text
+    assert "запрос <b>" not in text
+
+
+def test_list_escapes_sro_name():
+    hit = parse_list_row(
+        "nopriz",
+        {
+            "id": 3,
+            "short_description": "ООО <script>",
+            "member_status": {"code": "1", "title": "Является членом"},
+            "sro": {
+                "id": 1,
+                "full_description": "Ассоциация <b>Злая</b>",
+                "registration_number": "СРО-П-001-01012010",
+            },
+        },
+    )
+    text = national_reestr.format_member_list("имя", [hit], 1)
+    assert "ООО &lt;script&gt;" in text
+    assert "Ассоциация &lt;b&gt;Злая&lt;/b&gt;" in text
+    assert "НОПРИЗ" in text
+    assert "СРО-П-001-01012010" in text
+    assert "<script>" not in text
 
 
 def test_help_and_welcome_mention_button(monkeypatch):

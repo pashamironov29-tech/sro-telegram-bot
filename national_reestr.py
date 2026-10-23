@@ -10,7 +10,7 @@
         "pageCount": "20", "sortBy": {}, "searchString": "<название или пусто>"}
   POST https://reestr.{nostroy|nopriz}.ru/api/member/{id}/info
   POST https://reestr.{nostroy|nopriz}.ru/api/sro/{id}
-       рег. номер СРО, если его не было в строке списка
+       рег. номер, если его не было в списке, и короткое имя СРО для кнопок
 
 НОСТРОЙ — строители, НОПРИЗ — изыскатели и проектировщики.
 Список — не только 15 партнёров.
@@ -76,6 +76,7 @@ class MemberHit:
     inn: str = ""
     ogrn: str = ""
     sro_name: str = ""
+    sro_short: str = ""
     sro_reg: str = ""
     sro_id: int | None = None
     sro_note: str = ""
@@ -206,14 +207,15 @@ def _status_line(title: str, code: str, registry_date: str, suspension_date: str
     return title
 
 
-def _sro_fields(obj: dict) -> tuple[str, str, int | None, str]:
+def _sro_fields(obj: dict) -> tuple[str, str, str, int | None, str]:
     sro = obj.get("sro") if isinstance(obj, dict) else None
     if not isinstance(sro, dict):
-        return "", "", None, ""
+        return "", "", "", None, ""
     name = _text(sro.get("full_description")) or _text(sro.get("short_description"))
+    short = _text(sro.get("short_description"))
     reg = _text(sro.get("registration_number"))
     note = _text(sro.get("deactivate_message"))
-    return name, reg, _as_int(sro.get("id")), note
+    return name, short, reg, _as_int(sro.get("id")), note
 
 
 def _org_name(obj: dict) -> str:
@@ -286,7 +288,7 @@ def parse_list_row(registry: str, row: dict) -> MemberHit | None:
     if member_id is None:
         return None
     title, code = _status_parts(row.get("member_status"))
-    sro_name, sro_reg, sro_id, sro_note = _sro_fields(row)
+    sro_name, sro_short, sro_reg, sro_id, sro_note = _sro_fields(row)
     return MemberHit(
         registry=registry,
         member_id=member_id,
@@ -294,6 +296,7 @@ def parse_list_row(registry: str, row: dict) -> MemberHit | None:
         inn=_text(row.get("inn")),
         ogrn=_text(row.get("ogrnip")),
         sro_name=sro_name,
+        sro_short=sro_short,
         sro_reg=sro_reg,
         sro_id=sro_id,
         sro_note=sro_note,
@@ -310,7 +313,7 @@ def apply_card(hit: MemberHit, card: dict) -> MemberHit:
     if not isinstance(card, dict):
         return hit
     title, code = _status_parts(card.get("member_status"))
-    sro_name, sro_reg, sro_id, sro_note = _sro_fields(card)
+    sro_name, sro_short, sro_reg, sro_id, sro_note = _sro_fields(card)
     name = _org_name(card) or hit.name
     suspension = format_date(card.get("suspension_date")) or hit.suspension_date
     registry_date = (
@@ -326,6 +329,7 @@ def apply_card(hit: MemberHit, card: dict) -> MemberHit:
         inn=_text(card.get("inn")) or hit.inn,
         ogrn=_text(card.get("ogrnip")) or hit.ogrn,
         sro_name=sro_name or hit.sro_name,
+        sro_short=sro_short or hit.sro_short,
         sro_reg=sro_reg or hit.sro_reg,
         sro_id=sro_id if sro_id is not None else hit.sro_id,
         sro_note=sro_note or hit.sro_note,
@@ -408,19 +412,27 @@ def _post(client: RegistryClient, url: str, body: dict) -> tuple[dict | None, Ba
 
 
 def _fill_sro_reg(client: RegistryClient, hit: MemberHit) -> MemberHit:
-    if hit.sro_reg or hit.sro_id is None:
+    sro_id = hit.sro_id
+    if hit.sro_reg or sro_id is None:
         return hit
-    payload, exc = _post(client, sro_url(hit.registry, hit.sro_id), {})
+    payload, exc = _post(client, sro_url(hit.registry, sro_id), {})
     if exc or not isinstance(payload, dict):
         return hit
     data = payload.get("data")
     if not isinstance(data, dict):
         return hit
     reg = _text(data.get("registration_number"))
-    name = _text(data.get("full_description")) or _text(data.get("short_description"))
-    if not reg and not name:
+    short = _text(data.get("short_description"))
+    name = _text(data.get("full_description")) or short
+    if not reg and not name and not short:
         return hit
-    return replace(hit, sro_reg=reg or hit.sro_reg, sro_name=name or hit.sro_name)
+    _remember_sro_brief(hit.registry, sro_id, short, name, reg)
+    return replace(
+        hit,
+        sro_reg=reg or hit.sro_reg,
+        sro_name=name or hit.sro_name,
+        sro_short=short or hit.sro_short,
+    )
 
 
 def format_member_card(hit: MemberHit) -> str:
@@ -456,29 +468,174 @@ def format_member_card(hit: MemberHit) -> str:
     return "\n".join(lines)
 
 
+# Кнопка Telegram — до 64 символов, callback_data — до 64 байт.
+# Держим подпись короче, чтобы на телефоне было видно реестр и СРО.
+_BUTTON_LIMIT = 60
+_SEP = " · "
+_QUOTE_RE = re.compile(r"[«»\"“”„]+")
+_SRO_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"саморегулируемая\s+организация|"
+    r"некоммерческое\s+партн[её]рство|"
+    r"ассоциация|"
+    r"союз|"
+    r"сро|"
+    r"нп|"
+    r"ас|"
+    r"а"
+    r")(?=\s|$|[«»\"“”„()\-–—])",
+    re.IGNORECASE,
+)
+_ORG_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"общество\s+с\s+ограниченной\s+ответственностью|"
+    r"публичное\s+акционерное\s+общество|"
+    r"непубличное\s+акционерное\s+общество|"
+    r"закрытое\s+акционерное\s+общество|"
+    r"открытое\s+акционерное\s+общество|"
+    r"акционерное\s+общество|"
+    r"индивидуальный\s+предприниматель|"
+    r"ооо|оао|зао|пао|нао|ао|ип|нко|ано"
+    r")(?=\s|$)",
+    re.IGNORECASE,
+)
+_SRO_TAIL_RE = re.compile(
+    r"\s+в\s+(?:строительстве|проектировании|изысканиях)\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _one_line(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").replace("\n", " ")).strip()
+
+
+def _clip(text: str, limit: int) -> str:
+    """Обрезать по словам, лимит — в символах, не в байтах."""
+    text = _one_line(text)
+    if limit <= 0 or not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit == 1:
+        return "…"
+    cut = text[: limit - 1].rstrip()
+    if " " in cut:
+        head = cut.rsplit(" ", 1)[0].rstrip(" ·,;:-")
+        if len(head) >= max(4, limit // 3):
+            cut = head
+    cut = cut.rstrip(" ·,;:-")
+    if not cut:
+        cut = text[: limit - 1].rstrip()
+    return cut + "…"
+
+
+def _strip_sro_wrappers(text: str) -> str:
+    cleaned = _one_line(_QUOTE_RE.sub(" ", text))
+    for _ in range(8):
+        nxt = cleaned.lstrip(" \t-–—\"'«»“”„().,")
+        nxt = _SRO_PREFIX_RE.sub("", nxt, count=1)
+        nxt = nxt.strip(" \t-–—\"'«»“”„().,")
+        nxt = _one_line(nxt)
+        if not nxt or nxt == cleaned:
+            break
+        cleaned = nxt
+    return cleaned
+
+
+def _org_button_name(name: str) -> str:
+    cleaned = _one_line(_QUOTE_RE.sub(" ", name))
+    nxt = _ORG_PREFIX_RE.sub("", cleaned, count=1).strip()
+    return _one_line(nxt) or cleaned
+
+
+def _sro_button_name(name: str) -> str:
+    """Короткое имя с карточки СРО: без «Ассоциация» и хвоста «в строительстве»."""
+    raw = _one_line(_QUOTE_RE.sub(" ", name))
+    if not raw:
+        return ""
+    cleaned = _strip_sro_wrappers(raw)
+    if not cleaned:
+        cleaned = raw
+    cleaned = _one_line(_SRO_TAIL_RE.sub("", cleaned))
+    cleaned = re.sub(r"(?i)^объединение\b", "Объед.", cleaned, count=1)
+    return _one_line(cleaned)
+
+
+def _fit_button(org: str, registry: str, sro: str) -> str:
+    """Реестр не обрезаем: укорачиваем название организации и СРО."""
+    org = _one_line(org) or "Организация"
+    registry = _one_line(registry)
+    sro = _one_line(sro)
+    if registry and sro:
+        overhead = len(_SEP) * 2 + len(registry)
+        budget = _BUTTON_LIMIT - overhead
+        if budget < 4:
+            room = _BUTTON_LIMIT - len(_SEP) - len(registry)
+            return f"{_clip(org, max(1, room))}{_SEP}{registry}"
+        if len(org) + len(sro) <= budget:
+            return f"{org}{_SEP}{registry}{_SEP}{sro}"
+        sro_take = min(len(sro), max(4, budget // 2))
+        org_take = budget - sro_take
+        if len(org) < org_take:
+            org_take = len(org)
+            sro_take = budget - org_take
+        elif len(sro) < sro_take:
+            sro_take = len(sro)
+            org_take = budget - sro_take
+        org_part = _clip(org, max(1, org_take))
+        sro_part = _clip(sro, max(1, sro_take))
+        return f"{org_part}{_SEP}{registry}{_SEP}{sro_part}"
+    if registry:
+        room = _BUTTON_LIMIT - len(_SEP) - len(registry)
+        if room < 1:
+            return _clip(registry, _BUTTON_LIMIT)
+        return f"{_clip(org, room)}{_SEP}{registry}"
+    if sro:
+        room = _BUTTON_LIMIT - len(_SEP) - len(sro)
+        if room >= 4 and len(org) > room:
+            return f"{_clip(org, room)}{_SEP}{sro}"
+        return _clip(f"{org}{_SEP}{sro}", _BUTTON_LIMIT)
+    return _clip(org, _BUTTON_LIMIT)
+
+
+def _membership_where(hit: MemberHit) -> str:
+    parts: list[str] = []
+    if hit.registry_title:
+        parts.append(hit.registry_title)
+    sro = hit.sro_name or hit.sro_short
+    if sro:
+        parts.append(sro)
+    if hit.sro_reg:
+        parts.append(hit.sro_reg)
+    return _SEP.join(parts)
+
+
 def format_member_list(query: str, hits: list[MemberHit], total: int) -> str:
     lines = [
         f"🏛 По запросу «<b>{_h(query)}</b>» найдено: {total}",
         "Выберите организацию:",
     ]
     for index, hit in enumerate(hits, start=1):
-        where = hit.sro_reg or hit.sro_name or hit.registry_title
         status = hit.status_title or "статус не указан"
-        lines.append(f"{index}. {_h(hit.name)} — {_h(status)} — {_h(where)}")
+        lines.append(
+            f"{index}. {_h(hit.name)} — {_h(status)} — {_h(_membership_where(hit))}"
+        )
     if total > len(hits):
         lines.append(f"Показаны первые {len(hits)} из {total}. Уточните запрос или введите ИНН.")
     return "\n".join(lines)
 
 
 def button_label(hit: MemberHit) -> str:
+    org = _org_button_name(hit.name)
+    registry = hit.registry_title
+    sro = _sro_button_name(hit.sro_short or hit.sro_name)
+    if registry or sro:
+        return _fit_button(org, registry, sro)
     if hit.status_code == "1":
         status = "член"
     else:
         status = hit.status_title or "карточка"
-    raw = f"{hit.name} · {status}"
-    if len(raw) > 60:
-        return raw[:59] + "…"
-    return raw
+    return _clip(f"{hit.name}{_SEP}{status}", _BUTTON_LIMIT)
 
 
 def callback_payload(hit: MemberHit) -> str:
@@ -514,6 +671,74 @@ def cached_hit(registry: str, member_id: int) -> MemberHit | None:
 def clear_hit_cache() -> None:
     with _cache_lock:
         _HIT_CACHE.clear()
+
+
+# Короткое имя СРО с карточки /api/sro/{id}. В строке списка его нет.
+# Телефоны и почта с той же карточки сюда не пишем.
+_SRO_BRIEF: dict[tuple[str, int], tuple[str, str, str]] = {}
+_SRO_BRIEF_MAX = 400
+
+
+def _remember_sro_brief(
+    registry: str, sro_id: int, short: str, full: str, reg: str
+) -> None:
+    key = (registry, int(sro_id))
+    with _cache_lock:
+        _SRO_BRIEF.pop(key, None)
+        _SRO_BRIEF[key] = (short, full, reg)
+        while len(_SRO_BRIEF) > _SRO_BRIEF_MAX:
+            _SRO_BRIEF.pop(next(iter(_SRO_BRIEF)))
+
+
+def _cached_sro_brief(registry: str, sro_id: int) -> tuple[str, str, str] | None:
+    with _cache_lock:
+        return _SRO_BRIEF.get((registry, int(sro_id)))
+
+
+def clear_sro_cache() -> None:
+    with _cache_lock:
+        _SRO_BRIEF.clear()
+
+
+def _apply_sro_brief(hit: MemberHit, short: str, full: str, reg: str) -> MemberHit:
+    return replace(
+        hit,
+        sro_short=short or hit.sro_short,
+        sro_name=hit.sro_name or full or short,
+        sro_reg=hit.sro_reg or reg,
+    )
+
+
+def _load_sro_brief(client: RegistryClient, hit: MemberHit) -> MemberHit:
+    if hit.sro_id is None:
+        return hit
+    cached = _cached_sro_brief(hit.registry, hit.sro_id)
+    if cached is not None:
+        return _apply_sro_brief(hit, *cached)
+    payload, exc = _post(client, sro_url(hit.registry, hit.sro_id), {})
+    if exc or not isinstance(payload, dict):
+        return hit
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return hit
+    short = _text(data.get("short_description"))
+    full = _text(data.get("full_description")) or short
+    reg = _text(data.get("registration_number"))
+    if not short and not full and not reg:
+        return hit
+    _remember_sro_brief(hit.registry, hit.sro_id, short, full, reg)
+    return _apply_sro_brief(hit, short, full, reg)
+
+
+def _attach_sro_shorts(client: RegistryClient, hits: list[MemberHit]) -> list[MemberHit]:
+    """Подпись кнопки. Сбой карточки СРО не прячет уже найденный список."""
+    ready: list[MemberHit] = []
+    for hit in hits:
+        if hit.sro_short or hit.sro_id is None:
+            ready.append(hit)
+            continue
+        ready.append(_load_sro_brief(client, hit))
+    return ready
 
 
 def _enrich(client: RegistryClient, hit: MemberHit) -> MemberHit:
@@ -610,7 +835,7 @@ def _search_members(query: str, *, client: RegistryClient | None) -> SearchResul
         remember(hit)
         return SearchResult(format_member_card(hit) + note)
 
-    shown = hits[:LIST_CAP]
+    shown = _attach_sro_shorts(own_client, hits[:LIST_CAP])
     for hit in shown:
         remember(hit)
     buttons = [PickButton(button_label(hit), callback_payload(hit)) for hit in shown]
