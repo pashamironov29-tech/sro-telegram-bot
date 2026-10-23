@@ -211,7 +211,7 @@ def test_long_texts_fit_message_limit():
     card = _nostroy_card(10)
     for item in card["experts_by_category"]["regular"]:
         item["fio"] = "Очень-Длинная-Фамилия " * 25
-        item["number"] = "С-77-" + "9" * 40
+        item["number"] = "С-77-" + str(item["id"]) + "9" * 40
     view = load_member_view("nat:nostroy:10", client=_client(_transport(card)))
     assert len(view.text) <= national_reestr.MESSAGE_LIMIT
     assert "не поместилось" in view.text
