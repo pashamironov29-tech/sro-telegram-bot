@@ -30,18 +30,23 @@
 
 С 16.10.2026 часть карточек НОСТРОЙ приходит с датой специалистов и пустыми
 списками experts_by_category (regular/danger/other). Отдельного публичного
-адреса для этих строк нет: страница члена показывает «Нет данных о
-специалистах». Такие пустые списки не стирают уже записанных специалистов
-и не роняют весь прогон. На СРО пишется одно предупреждение. Пока в базе
-строк нет, карточку с датой читаем снова — вдруг реестр снова отдаст ФИО.
+адреса нет: страница члена показывает «Нет данных о специалистах»,
+те же корзины и те же поля fio/number, что у карточек со строками.
+Такие пустые корзины не считаются сбоем, админам не пишем и в порог
+не кладём. Уже записанных специалистов не стираем и отпечаток списка
+не двигаем: следующий прогон прочитает карточку снова. Пока в базе
+строк нет, карточку с датой тоже читаем снова.
 
-Если среди скачанных в этом проходе карточек с датой специалистов пустых
-больше порога, админам уходит одно сообщение. Код выхода из‑за этого
-остаётся 0. По одной СРО: SPECIALIST_EMPTY_RATIO (0.20) и
-SPECIALIST_EMPTY_MIN (10) — пустых не меньше минимума и доля строго
-больше порога. По всему прогону отдельно: SPECIALIST_EMPTY_TOTAL_RATIO
-и SPECIALIST_EMPTY_TOTAL_MIN, те же числа по умолчанию. Доля 0 или
-минимум 0 выключают свою проверку.
+Порог админам — только если блок специалистов не разобран: поля нет
+или оно не пустые корзины, а строк мы не получили. Код выхода из‑за
+этого остаётся 0. По одной СРО: SPECIALIST_EMPTY_RATIO (0.20) и
+SPECIALIST_EMPTY_MIN (10) — таких карточек не меньше минимума и доля
+строго больше порога. По всему прогону отдельно:
+SPECIALIST_EMPTY_TOTAL_RATIO и SPECIALIST_EMPTY_TOTAL_MIN, те же числа
+по умолчанию. Доля 0 или минимум 0 выключают свою проверку.
+
+В конце прогона в лог и в текст админам пишется, сколько специалистов
+добавлено и убрано относительно прошлого состояния, по каждой СРО и всего.
 
 Перед записью делается согласованная копия specialists.sqlite
 (метод backup у sqlite3) в каталог specialists_backups рядом с файлом.
@@ -84,13 +89,16 @@ from pathlib import Path
 
 import requests
 
+from log_redact import redact_secrets
 from specialist_reestr import (
+    CARD_ROWS_MARK,
     SroTarget,
     allow_prune_codes,
     card_has_substance,
     connect,
     db_path as specialists_db_path,
     ensure_schema,
+    experts_published_empty,
     init_db,
     list_stamp,
     list_would_wipe_too_much,
@@ -435,10 +443,15 @@ class SroStats:
     specialists: int = 0
     errors: int = 0
     removed: int = 0
+    spec_added: int = 0
+    spec_removed: int = 0
     api_count: int | None = None
     expert_dated: int = 0
     # Сколько скачанных карточек с датой специалистов и сколько из них без строк.
     expert_checked: int = 0
+    # Пустые корзины, как их отдал реестр. В порог и админам не идут.
+    published_empty: int = 0
+    # Блок специалистов не разобран: поля нет или форма не та.
     empty_despite_date: int = 0
     list_failed: bool = False
     list_rejected: bool = False
@@ -470,6 +483,10 @@ def _should_skip(
         # Дата специалистов в списке есть, а строк в базе нет — карточку
         # когда-то сохранили пустой. Читаем ещё раз.
         if _expert_mark(row) and specialist_count <= 0:
+            return False
+        # Отпечаток без |rows= — прошлый прогон мог записать дату, не разобрав
+        # строки (пустые корзины). Такую карточку читаем снова.
+        if _expert_mark(row) and CARD_ROWS_MARK not in (stored["card_stamp"] or ""):
             return False
         return True
     return False
@@ -555,6 +572,21 @@ def empty_cards_alert(
         else:
             lines.append(f"Всего: {total_empty} из {total_checked} ({share:.0%}).")
     lines.append("Уже записанных специалистов этот проход не удалял.")
+    return "\n".join(lines)
+
+
+def format_specialist_delta(rows: list[SroStats]) -> str:
+    """Сколько специалистов добавлено и убрано к прошлому состоянию базы."""
+    lines = ["Специалисты к прошлому состоянию:"]
+    total_added = 0
+    total_removed = 0
+    for stats in rows:
+        lines.append(
+            f"{stats.code}: добавлено {stats.spec_added}, убрано {stats.spec_removed}"
+        )
+        total_added += stats.spec_added
+        total_removed += stats.spec_removed
+    lines.append(f"Всего: добавлено {total_added}, убрано {total_removed}")
     return "\n".join(lines)
 
 
@@ -657,8 +689,38 @@ def _backup_or_alert(
     return True
 
 
+def _telegram_send_error(response) -> str:
+    """Пустая строка — Telegram принял сообщение. Иначе код и description."""
+    status = getattr(response, "status_code", None)
+    payload = None
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict) and payload.get("ok") is True and (status is None or int(status) < 400):
+        return ""
+    description = ""
+    if isinstance(payload, dict):
+        description = str(payload.get("description") or "").strip()
+        code = payload.get("error_code")
+        if code:
+            description = f"error_code={code} {description}".strip()
+    if status is not None and not description.startswith("HTTP"):
+        description = f"HTTP {status} {description}".strip()
+    if not description:
+        description = "ответ без ok"
+    if len(description) > 300:
+        description = description[:300]
+    return description
+
+
 def notify_admins(text: str) -> None:
-    """Сообщение в Telegram админам. Сбой отправки синк не роняет и токен не печатает."""
+    """Сообщение в Telegram админам. Сбой отправки синк не роняет.
+
+    В лог пишется причина: тип исключения или description Telegram
+    (чат не найден, бот заблокирован, разбор HTML). Токен из текста
+    исключения вырезается. Сетевой обрыв пробуем ещё раз.
+    """
     try:
         from config_keys import BOT_ADMIN_IDS, BOT_TOKEN
     except Exception:
@@ -666,25 +728,44 @@ def notify_admins(text: str) -> None:
         return
     ids = _admin_ids(BOT_ADMIN_IDS)
     token = BOT_TOKEN.strip() if isinstance(BOT_TOKEN, str) else ""
-    if not ids or not token:
+    if not ids:
         print("админам не отправил: BOT_ADMIN_IDS пуст", flush=True)
+        return
+    if not token:
+        print("админам не отправил: BOT_TOKEN пуст", flush=True)
         return
     api = f"https://api.telegram.org/bot{token}/sendMessage"
     safe = html.escape(text)[:3500]
     for admin_id in ids:
-        try:
-            requests.post(
-                api,
-                json={
-                    "chat_id": admin_id,
-                    "text": safe,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True,
-                },
-                timeout=20,
+        for attempt in range(2):
+            try:
+                response = requests.post(
+                    api,
+                    json={
+                        "chat_id": admin_id,
+                        "text": safe,
+                        "parse_mode": "HTML",
+                        "disable_web_page_preview": True,
+                    },
+                    timeout=20,
+                )
+            except Exception as exc:
+                reason = redact_secrets(f"{type(exc).__name__}: {exc}")
+                if attempt == 0:
+                    continue
+                print(
+                    f"админам не отправил: telegram {admin_id}: {reason}",
+                    flush=True,
+                )
+                break
+            reason = redact_secrets(_telegram_send_error(response))
+            if not reason:
+                break
+            print(
+                f"админам не отправил: telegram {admin_id}: {reason}",
+                flush=True,
             )
-        except Exception:
-            print(f"админам не отправил: telegram {admin_id}", flush=True)
+            break
 
 
 def _stored_members(conn, target: SroTarget) -> int:
@@ -748,7 +829,8 @@ def sync_sro(
                 "старых записей не удаляю",
             )
             return stats
-        stats.removed = prune_members(conn, target, set(), allow_prune=True)
+        stats.removed, spec_removed = prune_members(conn, target, set(), allow_prune=True)
+        stats.spec_removed += spec_removed
         conn.commit()
         print(
             f"{target.code}: пустой список с count={fetched.api_count}, "
@@ -807,11 +889,16 @@ def sync_sro(
             # что уже лежит. Иначе один пустой ответ стирает НРС навсегда.
             keep_specialists_if_empty=_expert_mark(row) and already > 0,
         )
-        stats.specialists += saved
+        stats.specialists += saved.rows
+        stats.spec_added += saved.added
+        stats.spec_removed += saved.removed
         if _expert_mark(row):
             stats.expert_checked += 1
-            if saved == 0:
-                stats.empty_despite_date += 1
+            if saved.rows == 0:
+                if experts_published_empty(card):
+                    stats.published_empty += 1
+                else:
+                    stats.empty_despite_date += 1
         conn.commit()
         stats.fetched += 1
         if index % 100 == 0 or index == stats.listed:
@@ -828,19 +915,31 @@ def sync_sro(
             "Меньше половины — старых записей не удаляю",
         )
     else:
-        stats.removed = prune_members(conn, target, seen, allow_prune=allow_prune)
+        members_removed, spec_removed = prune_members(
+            conn, target, seen, allow_prune=allow_prune
+        )
+        stats.removed = members_removed
+        stats.spec_removed += spec_removed
     conn.commit()
+    if stats.published_empty:
+        print(
+            f"{target.code}: в реестре нет строк специалистов у "
+            f"{stats.published_empty} карточек с датой. "
+            "Пустые корзины — ответ реестра, не сбой разбора. Админам не шлю.",
+            flush=True,
+        )
     if stats.empty_despite_date:
         message = (
-            f"{target.code}: членов с датой специалистов и пустыми списками "
-            f"в карточке: {stats.empty_despite_date}. "
-            "Старых строк специалистов не стираю"
+            f"{target.code}: карточек с датой специалистов, но блок не разобран: "
+            f"{stats.empty_despite_date}. Старых строк специалистов не стираю"
         )
         print(message, flush=True)
         logging.getLogger(__name__).warning(message)
     print(
         f"{target.code}: готово, специалистов за этот проход {stats.specialists}, "
-        f"пустых при дате специалистов {stats.empty_despite_date}, "
+        f"добавлено {stats.spec_added}, убрано {stats.spec_removed}, "
+        f"в реестре без строк {stats.published_empty}, "
+        f"блок не разобран {stats.empty_despite_date}, "
         f"убрано членов {stats.removed}",
         flush=True,
     )
@@ -926,20 +1025,25 @@ def sync_all(
                 if stats.list_failed or stats.list_rejected or stats.too_many_card_errors:
                     failed.append(target.code)
             text = empty_cards_alert(collected, ratio, minimum, total_ratio, total_min)
+            delta = format_specialist_delta(collected)
             if text:
                 print(text, flush=True)
-                notify_admins(text)
+                notify_admins(f"{text}\n\n{delta}")
+            print(delta, flush=True)
         except SyncBlocked as exc:
             # Прогон остаётся running: ночной запуск продолжит с того же места.
+            delta = format_specialist_delta(collected)
             text = (
                 "Синк специалистов остановлен: "
-                f"{exc}. Следующий запуск продолжит этот же проход."
+                f"{exc}. Следующий запуск продолжит этот же проход.\n\n{delta}"
             )
             print(text, flush=True)
             notify_admins(text)
             return 1
         except Exception:
             # Запуск остаётся running — следующий старт его продолжит.
+            if collected:
+                print(format_specialist_delta(collected), flush=True)
             print("Синк оборвался, следующий запуск продолжит этот же проход.", flush=True)
             raise
         finish_run(conn, run_id, ok=not failed)

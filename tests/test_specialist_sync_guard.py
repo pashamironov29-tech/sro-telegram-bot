@@ -43,6 +43,16 @@ def test_env_int_falls_back(monkeypatch):
 
 
 def _empty_card(member_id: int) -> dict:
+    """Карточка без блока специалистов: это не пустые корзины реестра."""
+    return {
+        "id": member_id,
+        "inn": f"770000000{member_id}",
+        "short_description": f"ООО Номер {member_id}",
+        "member_status": {"title": "Является членом"},
+    }
+
+
+def _published_empty_card(member_id: int) -> dict:
     return {
         "id": member_id,
         "inn": f"770000000{member_id}",
@@ -123,8 +133,43 @@ def test_empty_cards_over_sro_threshold_alert_and_exit_zero(tmp_path, monkeypatc
     assert len(alerts) == 1
     assert "OGPS: 12 из 12" in alerts[0]
     assert "Всего: 12 из 12" in alerts[0]
+    assert "Всего: добавлено 0, убрано 0" in alerts[0]
     assert search_people("сидоров", db=db).status == "ok"
     assert search_people("иванова", db=db).status == "ok"
+
+
+def test_published_empty_buckets_do_not_alert(tmp_path, monkeypatch, capsys):
+    """Явные пустые корзины выше порога — не авария и не сообщение админам."""
+    ids = list(range(1, 13))
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(_ListApi(ids))
+    ) == 0
+
+    class _Published(_ByRegistry):
+        def __call__(self, url, body, timeout):
+            self.calls.append(url)
+            if url.endswith("/member/list"):
+                return _ByRegistry.__call__(self, url, body, timeout)
+            if "/member/" in url and url.endswith("/info"):
+                member_id = int(url.rstrip("/").split("/")[-2])
+                return 200, {"success": True, "data": _published_empty_card(member_id)}
+            return _ByRegistry.__call__(self, url, body, timeout)
+
+    rc, alerts, _db = _sync_empty(
+        tmp_path,
+        _Published({87: ids}, stamp="05.05.2026 00:00:00"),
+        monkeypatch,
+        codes=["OGPS"],
+        empty_ratio=0.20,
+        empty_min=10,
+        empty_total_ratio=0.20,
+        empty_total_min=10,
+    )
+    assert rc == 0
+    assert alerts == []
+    assert "Админам не шлю" in capsys.readouterr().out
+    assert search_people("сидоров", db=db).status == "ok"
 
 
 def test_empty_cards_below_threshold_stay_quiet(tmp_path, monkeypatch):
@@ -186,9 +231,11 @@ def test_total_threshold_alerts_when_each_sro_is_under(tmp_path, monkeypatch):
     )
     assert rc == 0
     assert len(alerts) == 1
-    assert "OGPS:" not in alerts[0]
-    assert "MOTS:" not in alerts[0]
+    assert "OGPS: 6 из 6" not in alerts[0]
+    assert "MOTS: 6 из 6" not in alerts[0]
     assert "Всего: 12 из 12" in alerts[0]
+    assert "OGPS: добавлено 0, убрано 0" in alerts[0]
+    assert "MOTS: добавлено 0, убрано 0" in alerts[0]
 
 
 def test_empty_alert_does_not_hide_other_failure(tmp_path, monkeypatch):
@@ -524,3 +571,91 @@ def test_systemd_on_failure_units_and_script():
     install = (_VPS / "install.sh").read_text(encoding="utf-8")
     assert "sro-sync-alert@.service" in install
     subprocess.run(["bash", "-n", str(_VPS / "sync_failure_alert.sh")], check=True)
+
+
+def _admin_config(monkeypatch, *, token: str, ids):
+    import config_keys
+
+    monkeypatch.setattr(config_keys, "BOT_TOKEN", token, raising=False)
+    monkeypatch.setattr(config_keys, "BOT_ADMIN_IDS", ids, raising=False)
+
+
+def test_notify_admins_logs_transport_error_without_token(monkeypatch, capsys):
+    import specialist_sync
+    from tests.support import FAKE_TG_TOKEN
+
+    _admin_config(monkeypatch, token=FAKE_TG_TOKEN, ids=[101])
+
+    def boom(*_args, **_kwargs):
+        raise requests.ConnectionError(
+            "Max retries exceeded with url: "
+            f"https://api.telegram.org/bot{FAKE_TG_TOKEN}/sendMessage"
+        )
+
+    monkeypatch.setattr(specialist_sync.requests, "post", boom)
+    specialist_sync.notify_admins("проверка")
+    out = capsys.readouterr().out
+    assert "админам не отправил: telegram 101:" in out
+    assert "ConnectionError" in out
+    assert FAKE_TG_TOKEN not in out
+    assert "TEST_FAKE_TOKEN" not in out
+
+
+def test_notify_admins_logs_telegram_description(monkeypatch, capsys):
+    import specialist_sync
+    from tests.support import FAKE_TG_TOKEN
+
+    _admin_config(monkeypatch, token=FAKE_TG_TOKEN, ids=[101])
+
+    class _Resp:
+        status_code = 403
+
+        def json(self):
+            return {
+                "ok": False,
+                "error_code": 403,
+                "description": "Forbidden: bot was blocked by the user",
+            }
+
+    monkeypatch.setattr(specialist_sync.requests, "post", lambda *_a, **_k: _Resp())
+    specialist_sync.notify_admins("проверка")
+    out = capsys.readouterr().out
+    assert "telegram 101:" in out
+    assert "bot was blocked by the user" in out
+    assert "403" in out
+    assert FAKE_TG_TOKEN not in out
+
+
+def test_notify_admins_retries_transport_then_ok(monkeypatch, capsys):
+    import specialist_sync
+    from tests.support import FAKE_TG_TOKEN
+
+    _admin_config(monkeypatch, token=FAKE_TG_TOKEN, ids=[101])
+    calls = {"n": 0}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True}
+
+    def post(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise requests.Timeout("timed out")
+        return _Resp()
+
+    monkeypatch.setattr(specialist_sync.requests, "post", post)
+    specialist_sync.notify_admins("проверка")
+    assert calls["n"] == 2
+    assert "не отправил" not in capsys.readouterr().out
+
+
+def test_notify_admins_names_empty_token(monkeypatch, capsys):
+    import specialist_sync
+
+    _admin_config(monkeypatch, token="   ", ids=[101])
+    specialist_sync.notify_admins("проверка")
+    out = capsys.readouterr().out
+    assert "BOT_TOKEN пуст" in out
+    assert "BOT_ADMIN_IDS пуст" not in out
