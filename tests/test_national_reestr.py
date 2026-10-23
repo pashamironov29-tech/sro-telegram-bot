@@ -406,8 +406,8 @@ def test_max_button_opens_search_and_list(max_bot, monkeypatch):
     max_bot.clear()
     monkeypatch.setattr(
         national_reestr,
-        "load_member_text",
-        lambda payload, **_kwargs: f"карточка {payload}",
+        "load_member_view",
+        lambda payload, **_kwargs: national_reestr.SearchResult(f"карточка {payload}"),
     )
     max_bot.m.handle_callback(TEST_UID, "nat:nostroy:10", {})
     assert "карточка nat:nostroy:10" in max_bot.blob()
@@ -463,8 +463,8 @@ def test_tg_menu_has_button_and_handles_query(monkeypatch):
 
     monkeypatch.setattr(
         national_reestr,
-        "load_member_text",
-        lambda payload, **_kwargs: "карточка из кнопки",
+        "load_member_view",
+        lambda payload, **_kwargs: national_reestr.SearchResult("карточка из кнопки"),
     )
     bot_FINAL_GOLD.handle_national_pick(
         types.SimpleNamespace(
