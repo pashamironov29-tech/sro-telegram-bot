@@ -9,6 +9,8 @@
        {"filters": {"inn"|"ogrnip": "..."} | {}, "page": 1,
         "pageCount": "20", "sortBy": {}, "searchString": "<название или пусто>"}
   POST https://reestr.{nostroy|nopriz}.ru/api/member/{id}/info
+       в ответе и специалисты НРС организации: НОСТРОЙ — experts_by_category,
+       НОПРИЗ — specialists_data (корзины regular / danger / other)
   POST https://reestr.{nostroy|nopriz}.ru/api/sro/{id}
        рег. номер, если его не было в списке, и короткое имя СРО для кнопок
 
@@ -54,6 +56,12 @@ SEARCH_FAIL = (
 )
 
 _CB_RE = re.compile(r"^nat:(nostroy|nopriz):(\d{1,12})$")
+_PAGE_CB_RE = re.compile(r"^natp:(nostroy|nopriz):(\d{1,12}):(\d{1,4})$")
+PEOPLE_PAGE = 10
+PEOPLE_FAIL = (
+    "Список специалистов сейчас не загрузился: реестр не ответил. "
+    "Попробуйте позже или откройте карточку в реестре."
+)
 
 
 @dataclass
@@ -842,19 +850,162 @@ def _search_members(query: str, *, client: RegistryClient | None) -> SearchResul
     return SearchResult(format_member_list(value, shown, total) + note, buttons)
 
 
-def load_member_text(payload: str, *, client: RegistryClient | None = None) -> str:
-    """Карточка по inline-кнопке. Сбой API не пробрасывается."""
+# --- специалисты НРС организации (из той же карточки /member/{id}/info) ---
+
+
+@dataclass
+class Person:
+    fio: str
+    number: str = ""
+    kind: str = ""
+    work: str = ""
+    added: str = ""
+
+
+def _type_title(value) -> str:
+    if isinstance(value, dict):
+        return _text(value.get("title") or value.get("code"))
+    return _text(value)
+
+
+def specialists_block(card) -> dict | None:
+    """Корзины специалистов или None, если реестр блок не отдал."""
+    if not isinstance(card, dict):
+        return None
+    block = card.get("experts_by_category")
+    if not isinstance(block, dict):
+        block = card.get("specialists_data")
+    return block if isinstance(block, dict) else None
+
+
+def extract_people(card) -> list[Person]:
+    """Специалисты карточки по порядку реестра, без дублей ФИО+номер."""
+    block = specialists_block(card) or {}
+    people: list[Person] = []
+    seen: dict[tuple[str, str], Person] = {}
+    for bucket, items in block.items():
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            fio = " ".join(_text(item.get("fio")).split())
+            if not fio:
+                continue
+            number = _text(item.get("number") or item.get("registration_number"))
+            kind = _type_title(item.get("expert_type") or item.get("spec_type")) or _text(bucket)
+            work = _type_title(item.get("work_type"))
+            key = (fio.lower(), number)
+            prev = seen.get(key)
+            if prev is not None:
+                if kind and kind not in prev.kind:
+                    prev.kind = f"{prev.kind} · {kind}" if prev.kind else kind
+                if work and work not in prev.work:
+                    prev.work = f"{prev.work} · {work}" if prev.work else work
+                continue
+            person = Person(fio, number, kind, work, format_date(item.get("created")))
+            seen[key] = person
+            people.append(person)
+    return people
+
+
+def _people_pages(count: int) -> int:
+    return max(1, (count + PEOPLE_PAGE - 1) // PEOPLE_PAGE)
+
+
+def page_payload(registry: str, member_id: int, page: int) -> str:
+    return f"natp:{registry}:{member_id}:{page}"
+
+
+def parse_page_callback(payload: str) -> tuple[str, int, int] | None:
+    match = _PAGE_CB_RE.match((payload or "").strip())
+    if not match:
+        return None
+    return match.group(1), int(match.group(2)), max(1, int(match.group(3)))
+
+
+def _format_person(index: int, person: Person) -> str:
+    line = f"{index}. <b>{_h(person.fio)}</b>"
+    if person.number:
+        line += f" — <code>{_h(person.number)}</code>"
+    extra = [part for part in (person.kind, person.work) if part]
+    if person.added:
+        extra.append(f"в списке с {person.added}")
+    if extra:
+        line += f"\n    {_h('; '.join(extra))}"
+    return line
+
+
+def format_people(card, page: int = 1) -> tuple[str, int, int]:
+    """Текст страницы специалистов, номер страницы и число страниц."""
+    block = specialists_block(card)
+    if block is None:
+        return "👥 Специалисты НРС: реестр не отдал список для этой организации.", 1, 1
+    people = extract_people(card)
+    if not people:
+        return "👥 Специалисты НРС: в реестре нет данных о специалистах.", 1, 1
+    pages = _people_pages(len(people))
+    page = min(max(1, page), pages)
+    start = (page - 1) * PEOPLE_PAGE
+    shown = people[start : start + PEOPLE_PAGE]
+    head = f"👥 <b>Специалисты НРС: {len(people)}</b>"
+    if pages > 1:
+        head += f" (стр. {page} из {pages})"
+    lines = [head]
+    lines.extend(_format_person(start + i, p) for i, p in enumerate(shown, start=1))
+    return "\n".join(lines), page, pages
+
+
+def _page_buttons(registry: str, member_id: int, page: int, pages: int) -> list[PickButton]:
+    buttons = []
+    if page > 1:
+        buttons.append(PickButton(f"◀ Специалисты, стр. {page - 1}", page_payload(registry, member_id, page - 1)))
+    if page < pages:
+        buttons.append(PickButton(f"Специалисты, стр. {page + 1} ▶", page_payload(registry, member_id, page + 1)))
+    return buttons
+
+
+def load_member_view(payload: str, *, client: RegistryClient | None = None) -> SearchResult:
+    """Карточка с первой страницей специалистов, либо следующая страница.
+
+    payload — nat:реестр:id (карточка) или natp:реестр:id:страница.
+    Сбой API не пробрасывается.
+    """
     try:
-        return _load_member_text(payload, client=client)
+        if (payload or "").startswith("natp:"):
+            return _load_people_page(payload, client=client)
+        return _load_member_view(payload, client=client)
     except Exception:
         log.warning("карточка единого реестра упала", exc_info=True)
-        return CARD_FAIL
+        return SearchResult(CARD_FAIL)
 
 
-def _load_member_text(payload: str, *, client: RegistryClient | None) -> str:
+def load_member_text(payload: str, *, client: RegistryClient | None = None) -> str:
+    """Карточка по inline-кнопке (только текст). Сбой API не пробрасывается."""
+    return load_member_view(payload, client=client).text
+
+
+def _load_people_page(payload: str, *, client: RegistryClient | None) -> SearchResult:
+    parsed = parse_page_callback(payload)
+    if not parsed:
+        return SearchResult("Кнопка устарела. Повторите поиск.")
+    registry, member_id, page = parsed
+    raw, exc = _post(client or make_client(), info_url(registry, member_id), {})
+    data = raw.get("data") if isinstance(raw, dict) else None
+    if exc or not isinstance(data, dict):
+        return SearchResult(PEOPLE_FAIL)
+    cached = cached_hit(registry, member_id)
+    name = cached.name if cached else _org_name(data)
+    text, page, pages = format_people(data, page)
+    if name:
+        text = f"🏛 <b>{_h(name)}</b>\n{text}"
+    return SearchResult(text, _page_buttons(registry, member_id, page, pages))
+
+
+def _load_member_view(payload: str, *, client: RegistryClient | None) -> SearchResult:
     parsed = parse_callback(payload)
     if not parsed:
-        return "Кнопка устарела. Повторите поиск."
+        return SearchResult("Кнопка устарела. Повторите поиск.")
     registry, member_id = parsed
     own_client = client or make_client()
     cached = cached_hit(registry, member_id)
@@ -862,17 +1013,20 @@ def _load_member_text(payload: str, *, client: RegistryClient | None) -> str:
     data = raw.get("data") if isinstance(raw, dict) else None
     if exc or not isinstance(data, dict):
         if cached:
-            return format_member_card(
+            card = format_member_card(
                 replace(
                     cached,
                     card_note="Подробности карточки (право и уровни) сейчас не загрузились.",
                 )
             )
-        return CARD_FAIL
+            return SearchResult(f"{card}\n\n{PEOPLE_FAIL}")
+        return SearchResult(CARD_FAIL)
     hit = apply_card(cached, data) if cached else hit_from_card(registry, member_id, data)
     hit = _fill_sro_reg(own_client, hit)
     remember(hit)
-    return format_member_card(hit)
+    people, page, pages = format_people(data, 1)
+    text = f"{format_member_card(hit)}\n\n{people}"
+    return SearchResult(text, _page_buttons(registry, member_id, page, pages))
 
 
 # --- режим ввода, отдельно для Telegram и MAX ---

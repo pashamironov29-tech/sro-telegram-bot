@@ -1050,13 +1050,14 @@ def handle_callback(user_id: int, payload: str, update: dict) -> None:
     if payload == "menu:nat":
         open_national(user_id)
         return
-    if payload.startswith("nat:"):
+    if payload.startswith(("nat:", "natp:")):
+        # Карточка сразу со специалистами НРС; natp: — следующая страница.
         try:
-            text = national_reestr.load_member_text(payload)
+            result = national_reestr.load_member_view(payload)
         except Exception:
             logging.exception("карточка НОСТРОЙ/НОПРИЗ")
-            text = CARD_FAIL
-        send(user_id, text, kb(back_main_row()))
+            result = national_reestr.SearchResult(CARD_FAIL)
+        send(user_id, result.text, national_result_keyboard(result))
         return
     if payload == "menu:restart":
         clear_user_sro(user_id)

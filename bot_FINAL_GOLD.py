@@ -3622,22 +3622,21 @@ def handle_ctxnav_callbacks(call):
     safe_send_message(chat_id, "Неизвестная команда.", reply_markup=get_main_keyboard(chat_id))
 
 
-@bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("nat:"))
+@bot.callback_query_handler(
+    func=lambda call: call.data and call.data.startswith(("nat:", "natp:"))
+)
 @log_errors
 def handle_national_pick(call):
-    safe_answer_callback(call.id, "Открываю карточку…")
+    """Карточка организации сразу со специалистами НРС; natp: — следующая страница."""
+    paging = call.data.startswith("natp:")
+    safe_answer_callback(call.id, "Загружаю специалистов…" if paging else "Открываю карточку…")
     chat_id = call.message.chat.id
     try:
-        text = national_reestr.load_member_text(call.data)
+        result = national_reestr.load_member_view(call.data)
     except Exception:
         logging.exception("карточка НОСТРОЙ/НОПРИЗ")
-        text = CARD_FAIL
-    finish_button_reply(
-        chat_id,
-        text,
-        reply_markup=get_national_keyboard(),
-        disable_web_page_preview=True,
-    )
+        result = national_reestr.SearchResult(CARD_FAIL)
+    _send_national_result(chat_id, result)
 
 
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("search_inn:"))
@@ -3672,7 +3671,7 @@ def handle_inline_search(call):
         safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.14.4"
+    BOT_VERSION = "1.14.5"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 
