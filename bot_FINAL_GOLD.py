@@ -3672,7 +3672,7 @@ def handle_inline_search(call):
         safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.14.3"
+    BOT_VERSION = "1.14.4"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 
