@@ -16,6 +16,7 @@ from specialist_reestr import (
     connect,
     director_fio_norm,
     ensure_schema,
+    experts_published_empty,
     extract_specialists,
     format_search_reply,
     normalize_person,
@@ -911,10 +912,25 @@ def test_nostroy_live_expert_shape_and_empty_buckets():
     assert empty["experts_by_category"] == {"regular": [], "danger": [], "other": []}
     assert empty["last_updated_experts_at_date_time_string"]
     assert extract_specialists(empty) == []
+    assert experts_published_empty(empty) is True
+    assert experts_published_empty(filled) is False
+    assert experts_published_empty({"inn": "1", "short_description": "ООО"}) is False
+    assert experts_published_empty({"experts_by_category": {}}) is False
+    assert experts_published_empty({"experts_by_category": {"regular": None}}) is False
+    assert experts_published_empty(
+        {"experts_by_category": {"regular": [{"id": 1}]}}
+    ) is False
+    assert experts_published_empty(
+        {"specialists_data": {"regular": [], "danger": []}}
+    ) is True
 
 
-def test_empty_published_experts_keep_rows_and_exit_zero(tmp_path, monkeypatch, caplog):
-    """Дата специалистов есть, корзины пустые: старые ФИО остаются, код 0, без алерта."""
+def test_empty_published_experts_keep_rows_and_exit_zero(tmp_path, monkeypatch, caplog, capsys):
+    """Дата специалистов есть, корзины пустые: старые ФИО остаются, код 0, без алерта.
+
+    Отпечаток списка при этом не двигается: тот же штамп на следующем прогоне
+    снова читает карточку, если реестр вернул строки.
+    """
     import specialist_sync
 
     alerts: list[str] = []
@@ -963,10 +979,8 @@ def test_empty_published_experts_keep_rows_and_exit_zero(tmp_path, monkeypatch, 
         for record in caplog.records
         if record.levelno == logging.WARNING and "не стираю" in record.getMessage()
     ]
-    assert warnings == [
-        "OGPS: членов с датой специалистов и пустыми списками "
-        "в карточке: 1. Старых строк специалистов не стираю"
-    ]
+    assert warnings == []
+    assert "Админам не шлю" in capsys.readouterr().out
 
     filled = _fixture("nostroy_member_experts.json")
     filled["experts_by_category"]["regular"][0]["fio"] = "Орлова Анна Сергеевна"
@@ -982,40 +996,90 @@ def test_empty_published_experts_keep_rows_and_exit_zero(tmp_path, monkeypatch, 
                 return 200, {"success": True, "data": card}
             return _EmptyExperts.__call__(self, url, body, timeout)
 
-    # Отпечаток списка тот же, строк в базе больше нуля — карточку не качаем.
-    # Новый отпечаток снова приносит строки: пишем их вместо старых.
+    # Штамп списка тот же, но пустые корзины его не подтвердили — карточку читаем
+    # снова и записываем вернувшиеся строки.
     assert sync_all(
         db_path=db,
         codes=["OGPS"],
         fresh=True,
         client=_client(_Restored([1, 2])),
     ) == 0
-    assert search_people("сидоров", db=db).status == "ok"
-
-    class _RestoredNewStamp(_Restored):
-        def __call__(self, url, body, timeout):
-            if url.endswith("/member/list"):
-                self.calls.append((url, body))
-                rows = [
-                    _nostroy_row(member_id, stamp="22.10.2026 00:00:00")
-                    for member_id in self.member_ids
-                ]
-                return 200, {
-                    "success": True,
-                    "data": {"count": len(rows), "countPages": 1, "data": rows},
-                }
-            return _Restored.__call__(self, url, body, timeout)
-
-    assert sync_all(
-        db_path=db,
-        codes=["OGPS"],
-        fresh=True,
-        client=_client(_RestoredNewStamp([1, 2])),
-    ) == 0
     assert search_people("сидоров", db=db).status == "none"
     restored = search_people("орлова", db=db)
     assert restored.status == "ok"
     assert "С-77-100001" in format_search_reply("орлова", db=db)
+
+
+def test_specialist_delta_counts_added_removed_and_pruned(tmp_path, capsys):
+    """Конец лога: по СРО и всего, сколько специалистов прибавилось и ушло."""
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(_ListApi([1, 2]))
+    ) == 0
+    first = capsys.readouterr().out
+    assert "OGPS: добавлено 2, убрано 0" in first
+    assert "Всего: добавлено 2, убрано 0" in first
+
+    class _ReplaceAndDrop(_ListApi):
+        def __call__(self, url, body, timeout):
+            self.calls.append((url, body))
+            if url.endswith("/member/list"):
+                rows = [_nostroy_row(1, stamp="03.03.2026 00:00:00")]
+                return 200, {
+                    "success": True,
+                    "data": {"count": 1, "countPages": 1, "data": rows},
+                }
+            if url.endswith("/member/1/info"):
+                return 200, {
+                    "success": True,
+                    "data": _nostroy_card(1, "Новикова Ольга Сергеевна"),
+                }
+            raise AssertionError(url)
+
+    assert sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(_ReplaceAndDrop([1]))
+    ) == 0
+    second = capsys.readouterr().out
+    assert "OGPS: добавлено 1, убрано 2" in second
+    assert "Всего: добавлено 1, убрано 2" in second
+    assert search_people("новикова", db=db).status == "ok"
+    assert search_people("сидоров", db=db).status == "none"
+    assert search_people("иванова", db=db).status == "none"
+
+
+def test_stamp_without_rows_mark_is_read_again(tmp_path):
+    """Старая база без |rows= не пропускает карточку: пустой прогон мог затереть штамп."""
+    db = tmp_path / "spec.sqlite"
+    assert sync_all(
+        db_path=db, codes=["OGPS"], fresh=True, client=_client(_ListApi([1]))
+    ) == 0
+    conn = connect(db, write=True)
+    try:
+        stored = conn.execute("SELECT card_stamp FROM members WHERE member_id=1").fetchone()
+        assert "|rows=" in (stored["card_stamp"] or "")
+        conn.execute(
+            "UPDATE members SET card_stamp=? WHERE member_id=1",
+            (stored["card_stamp"].split("|rows=")[0],),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    class _NewFio(_ListApi):
+        def __call__(self, url, body, timeout):
+            if "/member/" in url and url.endswith("/info"):
+                self.calls.append((url, body))
+                return 200, {
+                    "success": True,
+                    "data": _nostroy_card(1, "Новикова Ольга Сергеевна"),
+                }
+            return _ListApi.__call__(self, url, body, timeout)
+
+    api = _NewFio([1])
+    assert sync_all(db_path=db, codes=["OGPS"], fresh=True, client=_client(api)) == 0
+    assert _info_calls(api, "/member/1/info") == 1
+    assert search_people("новикова", db=db).status == "ok"
+    assert search_people("сидоров", db=db).status == "none"
 
 
 def test_timeout_is_retried():

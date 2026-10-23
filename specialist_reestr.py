@@ -7,8 +7,9 @@
 Карточка члена:
   НОСТРОЙ — поле experts_by_category (корзины regular / danger / other).
   В строке с октября 2026 есть id и is_highlighted, для поиска нужны fio
-  и number. Пустые корзины при заполненной дате специалистов — не другой
-  адрес, а карточка без строк: уже лежащих специалистов синк не стирает.
+  и number. Пустые корзины при заполненной дате — ответ реестра
+  («Нет данных о специалистах»), не другой адрес. Уже лежащих
+  специалистов синк из‑за этого не стирает.
   НОПРИЗ — поля experts_by_category нет, специалисты в specialists_data
   (те же корзины, номер в registration_number).
 
@@ -260,6 +261,18 @@ def card_stamp(card: dict) -> str:
     return "|".join(part for part in parts if part)
 
 
+# Пишется в card_stamp, когда строки специалистов реально разобраны и записаны.
+# Нет метки — отпечаток списка мог сохраниться с пустых корзин, карточку читаем снова.
+CARD_ROWS_MARK = "|rows="
+
+
+def confirmed_card_stamp(card: dict, rows: int) -> str:
+    """Отпечаток карточки плюс число записанных строк специалистов."""
+    base = card_stamp(card)
+    mark = f"{CARD_ROWS_MARK}{int(rows)}"
+    return f"{base}{mark}" if base else mark
+
+
 def _category_of(item: dict, bucket: str) -> str:
     typed = item.get("expert_type") or item.get("spec_type") or {}
     title = ""
@@ -317,6 +330,49 @@ def extract_specialists(card: dict) -> list[dict]:
                     f"{prev['category']} · {category}" if prev.get("category") else category
                 )
     return list(merged.values())
+
+
+def experts_published_empty(card: dict) -> bool:
+    """Реестр явно отдал пустые корзины специалистов.
+
+    Так страница члена показывает «Нет данных о специалистах».
+    Блока нет, он не словарь или в корзине есть строки — это не тот случай.
+    Строки без fio сюда не попадают: их ещё надо считать сбоем разбора.
+    """
+    if not isinstance(card, dict):
+        return False
+    block = card.get("experts_by_category")
+    if not isinstance(block, dict):
+        block = card.get("specialists_data")
+    if not isinstance(block, dict) or not block:
+        return False
+    saw_list = False
+    for items in block.values():
+        if isinstance(items, list):
+            if items:
+                return False
+            saw_list = True
+            continue
+        if items not in (None, ""):
+            return False
+    return saw_list
+
+
+def _specialist_keys(conn: sqlite3.Connection, registry: str, member_id: int) -> set[tuple[str, str]]:
+    rows = conn.execute(
+        "SELECT fio_norm, nrs_number FROM specialists WHERE registry=? AND member_id=?",
+        (registry, int(member_id)),
+    ).fetchall()
+    return {(row[0] or "", row[1] or "") for row in rows}
+
+
+@dataclass(frozen=True)
+class MemberSave:
+    """Сколько строк специалистов записано и чем набор отличается от прошлого."""
+
+    rows: int = 0
+    added: int = 0
+    removed: int = 0
 
 
 _db_path_override: str | None = None
@@ -405,16 +461,19 @@ def save_member(
     run_id: str,
     updated_at: str,
     keep_specialists_if_empty: bool = False,
-) -> int:
-    """Перезаписать члена и его специалистов. Вернуть, сколько строк специалистов.
+) -> MemberSave:
+    """Перезаписать члена и его специалистов.
 
     Пустая карточка не трогает ни члена, ни специалистов.
-    keep_specialists_if_empty: в карточке нет строк, но у члена они уже лежат
-    (НОСТРОЙ отдал пустые корзины при дате специалистов). Члена обновляем,
-    специалистов не удаляем. Если строки в карточке есть — пишем их как обычно.
+    keep_specialists_if_empty: в карточке нет строк, но у члена они уже лежат.
+    Члена обновляем, специалистов не удаляем и отпечаток списка не двигаем,
+    чтобы следующий прогон прочитал карточку снова. Если строки есть — пишем
+    их и помечаем card_stamp числом строк.
+    added/removed — разница набора (fio_norm, номер) с тем, что уже лежало,
+    без учёта перезаписи тех же людей.
     """
     if not card_has_substance(card):
-        return 0
+        return MemberSave()
     member_id = int(list_row.get("id") or card.get("id"))
     org_name = _org_name(card) or _org_name(list_row)
     inn = str(card.get("inn") or list_row.get("inn") or "").strip()
@@ -425,6 +484,34 @@ def save_member(
     director = director.strip()
     specs = extract_specialists(card)
     keep_existing = keep_specialists_if_empty and not specs
+    old_keys = _specialist_keys(conn, target.registry, member_id)
+    new_keys = {(spec["fio_norm"], spec["nrs_number"]) for spec in specs}
+    if keep_existing:
+        updated = conn.execute(
+            """
+            UPDATE members
+            SET sro_code=?, sro_name=?, org_name=?, inn=?, member_status=?,
+                director=?, director_norm=?, fetched_run=?, updated_at=?
+            WHERE registry=? AND member_id=?
+            """,
+            (
+                target.code,
+                target.name,
+                org_name,
+                inn,
+                status,
+                director,
+                director_fio_norm(director),
+                run_id,
+                updated_at,
+                target.registry,
+                member_id,
+            ),
+        )
+        if updated.rowcount:
+            return MemberSave()
+    added = len(new_keys - old_keys)
+    removed = len(old_keys - new_keys)
     conn.execute(
         """
         INSERT INTO members (
@@ -455,16 +542,15 @@ def save_member(
             director,
             director_fio_norm(director),
             list_stamp(list_row),
-            card_stamp(card),
+            confirmed_card_stamp(card, len(specs)),
             run_id,
             updated_at,
         ),
     )
-    if not keep_existing:
-        conn.execute(
-            "DELETE FROM specialists WHERE registry=? AND member_id=?",
-            (target.registry, member_id),
-        )
+    conn.execute(
+        "DELETE FROM specialists WHERE registry=? AND member_id=?",
+        (target.registry, member_id),
+    )
     for spec in specs:
         conn.execute(
             """
@@ -489,7 +575,7 @@ def save_member(
                 updated_at,
             ),
         )
-    return len(specs)
+    return MemberSave(rows=len(specs), added=added, removed=removed)
 
 
 def touch_skipped_member(
@@ -562,9 +648,10 @@ def prune_members(
     seen_ids: set[int],
     *,
     allow_prune: bool = False,
-) -> int:
-    """Убрать членов СРО, которых больше нет среди действующих. Вернуть, сколько членов.
+) -> tuple[int, int]:
+    """Убрать членов СРО, которых больше нет среди действующих.
 
+    Вернуть (сколько членов убрано, сколько специалистов убрано).
     Пустой набор и резкое падение числа не удаляют ничего: так битый ответ реестра
     не стирает СРО. Решение «это сбой» принимает синк и пишет админам.
     allow_prune или SPECIALIST_ALLOW_PRUNE для этой СРО порог пропускают.
@@ -576,10 +663,10 @@ def prune_members(
     ).fetchone()[0]
     before_n = int(before)
     if before_n <= 0 and not seen_ids:
-        return 0
+        return 0, 0
     permitted = allow_prune or target.code.upper() in allow_prune_codes()
     if not permitted and list_would_wipe_too_much(len(seen_ids), before_n):
-        return 0
+        return 0, 0
     conn.execute("DROP TABLE IF EXISTS seen_members")
     conn.execute("CREATE TEMP TABLE seen_members (id INTEGER PRIMARY KEY)")
     if seen_ids:
@@ -587,6 +674,14 @@ def prune_members(
             "INSERT INTO seen_members(id) VALUES (?)",
             [(int(mid),) for mid in seen_ids],
         )
+    spec_before = conn.execute(
+        """
+        SELECT COUNT(*) FROM specialists
+        WHERE registry=? AND sro_code=?
+          AND member_id NOT IN (SELECT id FROM seen_members)
+        """,
+        (target.registry, target.code),
+    ).fetchone()[0]
     conn.execute(
         """
         DELETE FROM specialists
@@ -608,7 +703,7 @@ def prune_members(
         (target.registry, target.code),
     ).fetchone()[0]
     conn.execute("DROP TABLE IF EXISTS seen_members")
-    return int(before) - int(after)
+    return int(before) - int(after), int(spec_before)
 
 
 def stored_member(conn: sqlite3.Connection, registry: str, member_id: int) -> sqlite3.Row | None:
