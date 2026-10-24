@@ -117,12 +117,15 @@ class MemberHit:
         )
 
 
-def make_client(transport=None) -> RegistryClient:
-    """Короткий запрос из чата: один таймаут, без паузы синка."""
+def make_client(transport=None, *, timeout: float | None = None) -> RegistryClient:
+    """Короткий запрос из чата: один таймаут, без паузы синка.
+
+    Без timeout — 12 секунд, так ходит MAX. Telegram передаёт 6.
+    """
     return RegistryClient(
         transport,
         min_interval=0,
-        timeout=REQUEST_TIMEOUT,
+        timeout=REQUEST_TIMEOUT if timeout is None else timeout,
         retries=1,
         sleep=lambda _s: None,
     )

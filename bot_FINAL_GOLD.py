@@ -180,10 +180,16 @@ from voprosy_faq import (
     resolve_voprosy_site_topic_button,
 )
 # 1. Добавляем встроенный модуль логирования
+import atexit
 import logging
+import queue
 import re
+import threading
 import time
 import requests
+from concurrent.futures import Future
+
+from telebot.apihelper import ApiTelegramException
 
 from log_redact import install_secret_log_redaction, redact_secrets as _redact_secrets
 
@@ -216,8 +222,169 @@ apihelper.CONNECT_TIMEOUT = 30
 apihelper.READ_TIMEOUT = 60
 
 # === МНОГОПОТОЧНОСТЬ ===
-# Бот берет токен из скрытого файла secrets.py и запускается для всех одновременно
-bot = telebot.TeleBot(BOT_TOKEN, num_threads=4)
+# Бот берет токен из скрытого файла secrets.py и запускается для всех одновременно.
+# 16 потоков читают апдейты. Долгий поиск и Checko сюда не кладём — у них свой пул.
+bot = telebot.TeleBot(BOT_TOKEN, num_threads=16)
+_raw_send_message = bot.send_message
+_raw_edit_message_text = bot.edit_message_text
+
+# Около 25 сообщений в секунду на весь бот. Всплеск — столько же, дальше ждём токен.
+TG_OUTGOING_RATE = 25.0
+# Дольше этого поток обработчика не спит на обычном обрыве сети.
+_TRANSIENT_SLEEP_CAP = 0.4
+# retry_after не длиннее секунды ждём прямо в обработчике. Дольше — в пуле tg-retry.
+_INLINE_429_MAX = 1.0
+_TG_429_SLEEP_CAP = 5.0
+_TG_429_MAX_TRIES = 3
+# Ответ быстрее этого — «печатает…» не шлём: это лишний вызов API.
+_FAST_REPLY_SEC = 0.3
+# Живой поиск НОСТРОЙ/НОПРИЗ из Telegram. У MAX остаётся свой таймаут (12 с).
+TG_NATIONAL_SEARCH_TIMEOUT = 6.0
+_NATIONAL_QUERY_TTL = 30.0
+_NATIONAL_QUERY_CACHE_MAX = 64
+HEAVY_WAIT_TEXT = "⏳ Ищу…"
+_HEAVY_WORKERS = 8
+_RETRY_WORKERS = 4
+
+
+class TokenBucket:
+    """Потокобезопасное ведро: не больше rate событий в секунду."""
+
+    def __init__(self, rate: float = TG_OUTGOING_RATE, capacity: float | None = None, *, clock=None, sleep=None):
+        if rate <= 0:
+            raise ValueError("rate")
+        self.rate = float(rate)
+        self.capacity = float(self.rate if capacity is None else capacity)
+        self._tokens = self.capacity
+        self._clock = clock or time.monotonic
+        self._sleep = sleep or time.sleep
+        self._updated = self._clock()
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = self._clock()
+                elapsed = max(0.0, now - self._updated)
+                self._updated = now
+                self._tokens = min(self.capacity, self._tokens + elapsed * self.rate)
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+                wait = (1.0 - self._tokens) / self.rate
+            self._sleep(wait)
+
+
+_outgoing_limiter = TokenBucket(TG_OUTGOING_RATE, TG_OUTGOING_RATE)
+
+
+class _TaskPool:
+    """Пул с daemon-потоками: pytest и остановка бота их не ждут."""
+
+    def __init__(self, max_workers: int, thread_name_prefix: str):
+        self._workers = max_workers
+        self._queue: queue.Queue = queue.Queue()
+        for index in range(max_workers):
+            thread = threading.Thread(
+                target=self._run,
+                name=f"{thread_name_prefix}_{index}",
+                daemon=True,
+            )
+            thread.start()
+
+    def _run(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            fn, fut = item
+            if not fut.set_running_or_notify_cancel():
+                continue
+            try:
+                result = fn()
+            except Exception as exc:
+                logging.error("фоновая задача упала", exc_info=True)
+                fut.set_exception(exc)
+            else:
+                fut.set_result(result)
+
+    def submit(self, fn, *args, **kwargs):
+        fut: Future = Future()
+
+        def call():
+            return fn(*args, **kwargs)
+
+        self._queue.put((call, fut))
+        return fut
+
+    def shutdown(self, wait: bool = False, cancel_futures: bool = False) -> None:
+        del wait, cancel_futures
+        for _ in range(self._workers):
+            self._queue.put(None)
+
+
+def _track(pool: _TaskPool, pending: set, lock: threading.Lock, fn) -> Future:
+    fut = pool.submit(fn)
+    with lock:
+        pending.add(fut)
+
+    def _done(finished: Future) -> None:
+        with lock:
+            pending.discard(finished)
+
+    fut.add_done_callback(_done)
+    return fut
+
+
+def _wait_pending(pending: set, lock: threading.Lock, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    while True:
+        with lock:
+            running = [item for item in pending if not item.done()]
+        if not running:
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError("фоновые задачи Telegram не успели")
+        running[0].result(timeout=max(0.01, deadline - time.monotonic()))
+
+
+_heavy_pool = _TaskPool(_HEAVY_WORKERS, "tg-heavy")
+_heavy_pending: set = set()
+_heavy_lock = threading.Lock()
+_retry_pool = _TaskPool(_RETRY_WORKERS, "tg-retry")
+_retry_pending: set = set()
+_retry_lock = threading.Lock()
+_national_query_cache: dict[str, tuple[float, object]] = {}
+_national_inflight: dict[str, Future] = {}
+_national_cache_lock = threading.Lock()
+_send_guard = threading.local()
+_edit_guard = threading.local()
+
+
+def _retry_sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def wait_heavy_tasks(timeout: float = 5.0) -> None:
+    _wait_pending(_heavy_pending, _heavy_lock, timeout)
+
+
+def wait_retry_tasks(timeout: float = 5.0) -> None:
+    _wait_pending(_retry_pending, _retry_lock, timeout)
+
+
+def clear_national_query_cache() -> None:
+    with _national_cache_lock:
+        _national_query_cache.clear()
+        _national_inflight.clear()
+
+
+def _shutdown_tg_pools() -> None:
+    _heavy_pool.shutdown(wait=False)
+    _retry_pool.shutdown(wait=False)
+
+
+atexit.register(_shutdown_tg_pools)
 
 _last_admin_error_alert: dict[str, float] = {}
 _ADMIN_ERROR_COOLDOWN_SEC = 45.0
@@ -353,6 +520,14 @@ def log_errors(func):
         try:
             return func(event, *args, **kwargs)
         except Exception as e:
+            # 429 — это лимит Telegram, не поломка бота. Ещё одно сообщение
+            # пользователю только сильнее упирается в тот же лимит.
+            if _is_tg_429(e):
+                logging.warning(
+                    "Telegram 429 в %s — повтор исчерпан, пользователю не пишем",
+                    func.__name__,
+                )
+                return None
             logging.error("Ошибка в функции %s", func.__name__, exc_info=True)
             print(
                 f"⚠️ Ошибка в {func.__name__}: {type(e).__name__}: {_redact_secrets(str(e))}",
@@ -407,52 +582,204 @@ def _is_tg_transient(exc: BaseException) -> bool:
     )
 
 
-def safe_send_message(chat_id, text, *, retries: int = 5, **kwargs):
-    """send_message с повтором при обрывах до api.telegram.org."""
+def _telegram_retry_after(exc: BaseException) -> float | None:
+    """Секунды из 429. None — это не лимит Telegram."""
+    if not isinstance(exc, ApiTelegramException):
+        return None
+    if getattr(exc, "error_code", None) != 429:
+        return None
+    result_json = getattr(exc, "result_json", None) or {}
+    params = result_json.get("parameters") if isinstance(result_json, dict) else None
+    if not isinstance(params, dict):
+        params = {}
+    raw = params.get("retry_after", 1)
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _is_tg_429(exc: BaseException) -> bool:
+    return _telegram_retry_after(exc) is not None
+
+
+def _invoke_send(*args, **kwargs):
+    depth = getattr(_send_guard, "depth", 0)
+    _send_guard.depth = depth + 1
+    try:
+        return bot.send_message(*args, **kwargs)
+    finally:
+        _send_guard.depth = depth
+
+
+def _invoke_edit(*args, **kwargs):
+    depth = getattr(_edit_guard, "depth", 0)
+    _edit_guard.depth = depth + 1
+    try:
+        return bot.edit_message_text(*args, **kwargs)
+    finally:
+        _edit_guard.depth = depth
+
+
+def _defer_outgoing(call, wait: float, attempts_left: int) -> None:
+    """Долгий retry_after не держит поток, который разбирает апдейты."""
+
+    def job() -> None:
+        if wait > 0:
+            _retry_sleep(wait)
+        for index in range(max(0, attempts_left)):
+            _outgoing_limiter.acquire()
+            try:
+                call()
+                return
+            except Exception as exc:
+                retry_after = _telegram_retry_after(exc)
+                if retry_after is None or index >= attempts_left - 1:
+                    logging.warning(
+                        "Повтор после 429 не удался: %s",
+                        type(exc).__name__,
+                    )
+                    return
+                pause = min(max(retry_after, 0.0), _TG_429_SLEEP_CAP)
+                if pause > 0:
+                    _retry_sleep(pause)
+
+    _track(_retry_pool, _retry_pending, _retry_lock, job)
+
+
+def _send_with_retry(invoke, *, retries: int = 5, kwargs: dict | None = None):
+    """invoke(kwargs) — одна отправка или правка.
+
+    429: ждём parameters.retry_after, но не дольше _TG_429_SLEEP_CAP
+    и не больше _TG_429_MAX_TRIES попыток. Долгое ожидание уходит
+    в пул tg-retry. Обрыв сети — короткая пауза, поток не зависает.
+    """
+    kw = dict(kwargs or {})
+    parse_mode = kw.get("parse_mode")
     last_exc: BaseException | None = None
-    parse_mode = kwargs.get("parse_mode")
-    for attempt in range(max(1, retries)):
+    attempt = 0
+    rate_tries = 0
+    limit = max(1, retries)
+    while attempt < limit:
+        _outgoing_limiter.acquire()
         try:
-            return bot.send_message(chat_id, text, **kwargs)
+            return invoke(kw)
         except Exception as exc:
             last_exc = exc
-            # Битый HTML — один раз без parse_mode
-            if parse_mode and attempt == 0 and not _is_tg_transient(exc):
-                kwargs = dict(kwargs)
-                kwargs.pop("parse_mode", None)
-                parse_mode = None
+            retry_after = _telegram_retry_after(exc)
+            if retry_after is not None:
+                rate_tries += 1
+                if rate_tries >= _TG_429_MAX_TRIES:
+                    break
+                wait = min(max(retry_after, 0.0), _TG_429_SLEEP_CAP)
+                left = _TG_429_MAX_TRIES - rate_tries
+                if wait > _INLINE_429_MAX:
+                    frozen = dict(kw)
+                    _defer_outgoing(lambda: invoke(frozen), wait, left)
+                    return None
+                if wait > 0:
+                    _retry_sleep(wait)
                 continue
-            if attempt < retries - 1 and _is_tg_transient(exc):
-                time.sleep(0.8 * (attempt + 1))
+            # Битый HTML — один раз без parse_mode. 429 и обрыв сюда не входят.
+            if parse_mode and attempt == 0 and not _is_tg_transient(exc):
+                kw = dict(kw)
+                kw.pop("parse_mode", None)
+                parse_mode = None
+                attempt += 1
+                continue
+            if attempt < limit - 1 and _is_tg_transient(exc):
+                _retry_sleep(min(0.8 * (attempt + 1), _TRANSIENT_SLEEP_CAP))
+                attempt += 1
                 continue
             break
     if last_exc:
         raise last_exc
     return None
+
+
+def safe_send_message(chat_id, text, *, retries: int = 5, **kwargs):
+    """send_message с повтором при обрывах и при 429."""
+    return _send_with_retry(
+        lambda kw: _invoke_send(chat_id, text, **kw),
+        retries=retries,
+        kwargs=kwargs,
+    )
 
 
 def safe_edit_message_text(chat_id, message_id, text, *, retries: int = 5, **kwargs):
-    last_exc: BaseException | None = None
-    parse_mode = kwargs.get("parse_mode")
-    for attempt in range(max(1, retries)):
+    return _send_with_retry(
+        lambda kw: _invoke_edit(text, chat_id, message_id, **kw),
+        retries=retries,
+        kwargs=kwargs,
+    )
+
+
+def _installed_send_message(*args, **kwargs):
+    # Повторный вход из safe_send_message — это уже сырой вызов библиотеки.
+    if getattr(_send_guard, "depth", 0) > 0:
+        return _raw_send_message(*args, **kwargs)
+    return safe_send_message(*args, **kwargs)
+
+
+def _installed_edit_message_text(text, chat_id, message_id=None, **kwargs):
+    # У библиотеки порядок (text, chat_id, message_id), у safe_edit — наоборот.
+    if getattr(_edit_guard, "depth", 0) > 0:
+        return _raw_edit_message_text(text, chat_id, message_id, **kwargs)
+    return safe_edit_message_text(chat_id, message_id, text, **kwargs)
+
+
+bot.send_message = _installed_send_message
+bot.edit_message_text = _installed_edit_message_text
+
+
+def _schedule_heavy(chat_id, produce, *, retries: int = 5, on_send_fail=None) -> None:
+    """Сразу «Ищу…», саму работу — в пул tg-heavy, ответ — правкой того сообщения."""
+    placeholder = None
+    try:
+        placeholder = safe_send_message(chat_id, HEAVY_WAIT_TEXT, parse_mode="HTML")
+    except Exception:
+        logging.warning("Не удалось отправить «Ищу…»", exc_info=True)
+
+    def job() -> None:
         try:
-            return bot.edit_message_text(
-                text, chat_id, message_id, **kwargs
+            text, markup, extra = produce()
+        except Exception:
+            logging.exception("фоновый запрос")
+            text, markup, extra = (
+                "⚠️ Не удалось выполнить запрос. Попробуйте ещё раз.",
+                None,
+                {"parse_mode": "HTML"},
             )
+        extra = dict(extra or {})
+        mid = getattr(placeholder, "message_id", None)
+        if mid is not None:
+            try:
+                edit_kw = dict(extra)
+                if isinstance(markup, types.InlineKeyboardMarkup):
+                    edit_kw["reply_markup"] = markup
+                safe_edit_message_text(chat_id, mid, text, retries=retries, **edit_kw)
+                return
+            except Exception:
+                logging.warning("Не удалось обновить «Ищу…»", exc_info=True)
+                try:
+                    bot.delete_message(chat_id, mid)
+                except Exception:
+                    pass
+        send_kw = dict(extra)
+        if markup is not None:
+            send_kw["reply_markup"] = markup
+        try:
+            safe_send_message(chat_id, text, retries=retries, **send_kw)
         except Exception as exc:
-            last_exc = exc
-            if parse_mode and attempt == 0 and not _is_tg_transient(exc):
-                kwargs = dict(kwargs)
-                kwargs.pop("parse_mode", None)
-                parse_mode = None
-                continue
-            if attempt < retries - 1 and _is_tg_transient(exc):
-                time.sleep(0.8 * (attempt + 1))
-                continue
-            break
-    if last_exc:
-        raise last_exc
-    return None
+            logging.warning("Не удалось отправить результат: %s", type(exc).__name__)
+            if on_send_fail is None:
+                return
+            try:
+                on_send_fail(exc)
+            except Exception:
+                logging.warning("запасная отправка не удалась", exc_info=True)
+
+    _track(_heavy_pool, _heavy_pending, _heavy_lock, job)
 
 
 def safe_answer_callback(call_id, text: str | None = None, **kwargs) -> None:
@@ -1204,39 +1531,15 @@ how_to_join_text = format_how_to_join_text("OGPS")
 # --- ТЕКСТ ПЕРЕЧНЯ ПРОВЕРЯЕМЫХ ДОКУМЕНТОВ ---
 documents_list_text = DOCUMENTS_LIST_TEXT
 def finish_button_reply(chat_id, text, reply_markup=None, parse_mode="HTML", **send_kwargs):
-    last_exc = None
-    for attempt in range(3):
-        try:
-            bot.send_message(
-                chat_id,
-                text,
-                parse_mode=parse_mode,
-                reply_markup=reply_markup,
-                **send_kwargs,
-            )
-            return
-        except Exception as exc:
-            last_exc = exc
-            # Сеть/Telegram иногда рвёт соединение — не пугаем пользователя с первой попытки
-            if attempt < 2 and (
-                "Connection" in type(exc).__name__
-                or "Timeout" in type(exc).__name__
-                or "RemoteDisconnected" in type(exc).__name__
-            ):
-                import time
-
-                time.sleep(0.6 * (attempt + 1))
-                continue
-            # Битый HTML — повтор без разметки
-            if parse_mode and attempt == 0:
-                try:
-                    bot.send_message(chat_id, text, reply_markup=reply_markup, **send_kwargs)
-                    return
-                except Exception as exc2:
-                    last_exc = exc2
-            break
-    if last_exc:
-        raise last_exc
+    # Тот же путь, что у safe_send_message: 429, короткая пауза на обрыв, лимитер.
+    safe_send_message(
+        chat_id,
+        text,
+        retries=3,
+        parse_mode=parse_mode,
+        reply_markup=reply_markup,
+        **send_kwargs,
+    )
 
 
 def _blanki_kit_footer(chat_id: int) -> str:
@@ -1665,13 +1968,15 @@ def _menu_markup(chat_id: int):
 
 
 def send_question_reply(chat_id: int, question: str) -> None:
-    try:
-        bot.send_chat_action(chat_id, "typing")
-    except Exception:
-        pass
-
     cancel_await_expected(chat_id)
+    started = time.monotonic()
     result = answer_question(question, chat_id=chat_id)
+    # Локальный ответ и так сразу уходит. «печатает…» на нём — лишний запрос в API.
+    if time.monotonic() - started >= _FAST_REPLY_SEC:
+        try:
+            bot.send_chat_action(chat_id, "typing")
+        except Exception:
+            pass
     answer = result.get("text") or NOT_FOUND_TEXT
     if result.get("not_found"):
         safe_send_message(
@@ -2134,7 +2439,7 @@ def open_national_search(chat_id: int) -> None:
     )
 
 
-def _send_national_result(chat_id: int, result) -> None:
+def _national_reply_markup(result):
     if result.buttons:
         markup = types.InlineKeyboardMarkup()
         for button in result.buttons:
@@ -2144,12 +2449,72 @@ def _send_national_result(chat_id: int, result) -> None:
                     callback_data=button.payload,
                 )
             )
-    else:
-        markup = get_national_keyboard()
+        return markup
+    return get_national_keyboard()
+
+
+def _national_cache_key(query: str) -> str:
+    return " ".join((query or "").split()).casefold()
+
+
+def _search_national_cached(query: str):
+    """Одинаковый запрос не ходит в реестр пачкой: один раз, потом кэш на 30 секунд."""
+    key = _national_cache_key(query)
+    now = time.monotonic()
+    with _national_cache_lock:
+        hit = _national_query_cache.get(key)
+        if hit is not None and now - hit[0] < _NATIONAL_QUERY_TTL:
+            return hit[1]
+        inflight = _national_inflight.get(key)
+        if inflight is None:
+            inflight = Future()
+            _national_inflight[key] = inflight
+            owner = True
+        else:
+            owner = False
+    if not owner:
+        return inflight.result(timeout=20)
+
+    try:
+        client = national_reestr.make_client(timeout=TG_NATIONAL_SEARCH_TIMEOUT)
+        result = national_reestr.search_members(query, client=client)
+    except Exception as exc:
+        with _national_cache_lock:
+            _national_inflight.pop(key, None)
+        inflight.set_exception(exc)
+        raise
+
+    with _national_cache_lock:
+        _national_query_cache.pop(key, None)
+        _national_query_cache[key] = (time.monotonic(), result)
+        while len(_national_query_cache) > _NATIONAL_QUERY_CACHE_MAX:
+            _national_query_cache.pop(next(iter(_national_query_cache)))
+        _national_inflight.pop(key, None)
+    inflight.set_result(result)
+    return result
+
+
+def _start_national_search(chat_id: int, query: str) -> None:
+    def produce():
+        try:
+            result = _search_national_cached(query)
+        except Exception:
+            logging.exception("поиск НОСТРОЙ/НОПРИЗ")
+            result = error_result()
+        return (
+            result.text,
+            _national_reply_markup(result),
+            {"parse_mode": "HTML", "disable_web_page_preview": True},
+        )
+
+    _schedule_heavy(chat_id, produce)
+
+
+def _send_national_result(chat_id: int, result) -> None:
     finish_button_reply(
         chat_id,
         result.text,
-        reply_markup=markup,
+        reply_markup=_national_reply_markup(result),
         disable_web_page_preview=True,
     )
 
@@ -2678,12 +3043,7 @@ def handle_text(message):
         return
 
     if is_national_mode(message.chat.id) and not _is_reply_menu_button(user_text):
-        try:
-            result = national_reestr.search_members(user_text)
-        except Exception:
-            logging.exception("поиск НОСТРОЙ/НОПРИЗ")
-            result = error_result()
-        _send_national_result(message.chat.id, result)
+        _start_national_search(message.chat.id, user_text)
         return
 
     if try_nrs_text_reply(message.chat.id, user_text):
@@ -3468,6 +3828,73 @@ def handle_fees_doc_download(call):
         )
 
 
+def _checko_fail_keyboard(inn: str):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton(
+            "🌐 Открыть на checko.ru",
+            url=checko_site_url(inn),
+        )
+    )
+    if org_in_local_reestr(inn):
+        kb.add(
+            types.InlineKeyboardButton(
+                "📦 В реестре СРО",
+                callback_data=f"chk:r:{inn}",
+            )
+        )
+    return kb
+
+
+def _start_checko_section(chat_id: int, inn: str, section: str, *, kind: str) -> None:
+    """Checko не занимает поток обработчика: сразу «Ищу…», ответ — правкой."""
+
+    def produce():
+        try:
+            text = format_checko_section(section, inn)
+        except Exception as exc:
+            label = "general" if kind == "f" else section
+            print(f"⚠️ Checko {label}: {exc}", flush=True)
+            if kind == "f":
+                text = (
+                    f"🔎 <b>Полная информация</b> (ИНН <code>{inn}</code>)\n\n"
+                    "Не удалось загрузить краткие данные. Выберите раздел ниже "
+                    "или откройте сайт."
+                )
+            else:
+                text = (
+                    f"⚠️ Не удалось загрузить раздел (ИНН <code>{inn}</code>).\n"
+                    "Выберите другой раздел или откройте сайт."
+                )
+        if kind == "f":
+            markup = get_checko_sections_keyboard(inn, page=0)
+        else:
+            markup = get_checko_after_section_keyboard(inn)
+        return (
+            text,
+            markup,
+            {"parse_mode": "HTML", "disable_web_page_preview": True},
+        )
+
+    def on_fail(exc: BaseException) -> None:
+        print(f"⚠️ chk:f send failed: {exc}", flush=True)
+        safe_send_message(
+            chat_id,
+            f"⚠️ Не удалось отправить меню Checko (сеть Telegram).\n"
+            f"ИНН <code>{inn}</code> — откройте карточку на сайте:",
+            parse_mode="HTML",
+            reply_markup=_checko_fail_keyboard(inn),
+            retries=3,
+        )
+
+    _schedule_heavy(
+        chat_id,
+        produce,
+        retries=4,
+        on_send_fail=on_fail if kind == "f" else None,
+    )
+
+
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("chk:"))
 @log_errors
 def handle_checko_callbacks(call):
@@ -3504,54 +3931,7 @@ def handle_checko_callbacks(call):
         inn = parts[2]
         print(f"🔎 chk:f inn={inn}", flush=True)
         safe_answer_callback(call.id, "Загружаю…")
-        try:
-            bot.send_chat_action(chat_id, "typing")
-        except Exception:
-            pass
-        # Сразу полезная карточка + меню разделов (не пустой экран).
-        try:
-            text = format_checko_section("general", inn)
-        except Exception as exc:
-            print(f"⚠️ Checko general: {exc}", flush=True)
-            text = (
-                f"🔎 <b>Полная информация</b> (ИНН <code>{inn}</code>)\n\n"
-                "Не удалось загрузить краткие данные. Выберите раздел ниже "
-                "или откройте сайт."
-            )
-        try:
-            safe_send_message(
-                chat_id,
-                text,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-                reply_markup=get_checko_sections_keyboard(inn, page=0),
-                retries=4,
-            )
-        except Exception as exc:
-            print(f"⚠️ chk:f send failed: {exc}", flush=True)
-            # Запасной путь — хотя бы ссылка на сайт.
-            kb = types.InlineKeyboardMarkup()
-            kb.add(
-                types.InlineKeyboardButton(
-                    "🌐 Открыть на checko.ru",
-                    url=checko_site_url(inn),
-                )
-            )
-            if org_in_local_reestr(inn):
-                kb.add(
-                    types.InlineKeyboardButton(
-                        "📦 В реестре СРО",
-                        callback_data=f"chk:r:{inn}",
-                    )
-                )
-            safe_send_message(
-                chat_id,
-                f"⚠️ Не удалось отправить меню Checko (сеть Telegram).\n"
-                f"ИНН <code>{inn}</code> — откройте карточку на сайте:",
-                parse_mode="HTML",
-                reply_markup=kb,
-                retries=3,
-            )
+        _start_checko_section(chat_id, inn, "general", kind="f")
         return
     if kind == "m" and len(parts) >= 3:
         inn = parts[2]
@@ -3576,26 +3956,7 @@ def handle_checko_callbacks(call):
         inn = parts[3]
         print(f"🔎 chk:s section={section} inn={inn}", flush=True)
         safe_answer_callback(call.id, "Загружаю…")
-        try:
-            bot.send_chat_action(chat_id, "typing")
-        except Exception:
-            pass
-        try:
-            text = format_checko_section(section, inn)
-        except Exception as exc:
-            print(f"⚠️ Checko {section}: {exc}", flush=True)
-            text = (
-                f"⚠️ Не удалось загрузить раздел (ИНН <code>{inn}</code>).\n"
-                "Выберите другой раздел или откройте сайт."
-            )
-        safe_send_message(
-            chat_id,
-            text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=get_checko_after_section_keyboard(inn),
-            retries=4,
-        )
+        _start_checko_section(chat_id, inn, section, kind="s")
         return
     safe_answer_callback(call.id, "Неизвестная команда")
 
@@ -3671,7 +4032,7 @@ def handle_inline_search(call):
         safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.14.5"
+    BOT_VERSION = "1.14.6"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 

@@ -421,7 +421,14 @@ def test_tg_menu_has_button_and_handles_query(monkeypatch):
         sent.append((text or "", kwargs.get("reply_markup")))
         return types.SimpleNamespace(message_id=len(sent))
 
+    edits = []
+
+    def edit(text, chat_id, message_id, **kwargs):
+        edits.append((text or "", kwargs.get("reply_markup"), message_id))
+        return types.SimpleNamespace(message_id=message_id)
+
     monkeypatch.setattr(bot_FINAL_GOLD.bot, "send_message", send)
+    monkeypatch.setattr(bot_FINAL_GOLD.bot, "edit_message_text", edit)
     monkeypatch.setattr(bot_FINAL_GOLD.bot, "answer_callback_query", lambda *a, **k: None)
     labels = []
     for row in bot_FINAL_GOLD.get_main_keyboard(chat_id).keyboard:
@@ -457,7 +464,9 @@ def test_tg_menu_has_button_and_handles_query(monkeypatch):
             from_user=types.SimpleNamespace(id=chat_id, first_name="Т", last_name="", username="u"),
         )
     )
-    text, markup = sent[-1]
+    bot_FINAL_GOLD.wait_heavy_tasks()
+    assert "Ищу…" in sent[-1][0]
+    text, markup, _mid = edits[-1]
     assert "найдено: 2" in text
     assert markup.keyboard[0][0].callback_data == "nat:nostroy:10"
 
