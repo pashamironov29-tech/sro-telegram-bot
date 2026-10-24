@@ -155,7 +155,7 @@ from sro_context import (
 from sro_fees import format_fees_message
 from sro_profiles import ACTIVITY_LABEL, assert_prod_sro_ready, get_sro_profile
 from trusted_members import format_trusted_members_message
-from users_log import touch_user, users_count
+from users_log import db_path, touch_user, users_count
 
 assert_prod_sro_ready()
 
@@ -1390,7 +1390,10 @@ def main() -> None:
     except Exception:
         pass
 
-    print(f"🚀 MAX-бот polling... пользователей в журнале: {users_count()}", flush=True)
+    print(
+        f"🚀 MAX-бот polling... пользователей в журнале: {users_count()} ({db_path().name})",
+        flush=True,
+    )
     print("Telegram-бота этот процесс не запускает.", flush=True)
 
     # Текст и вложения не блокируют друг друга.

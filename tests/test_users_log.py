@@ -1,18 +1,18 @@
-"""Журнал bot_users.json: сбой записи, два процесса, битый файл."""
+"""Журнал bot_users.sqlite: сбой записи, два процесса, перенос JSON."""
 
 from __future__ import annotations
 
 import json
 import multiprocessing
 import os
-import time
+import sqlite3
 import types
 from pathlib import Path
 
 import pytest
 
 import users_log
-from users_log import format_users_report, touch_user, users_count
+from users_log import format_users_report, list_users, touch_user, users_count
 
 
 def _message(chat_id: int, first_name: str = "U"):
@@ -24,8 +24,8 @@ def _message(chat_id: int, first_name: str = "U"):
     )
 
 
-def _touch_users_in_child(path: str, chat_ids: list[int], delay: float, start) -> None:
-    """Пишет своих пользователей. replace намеренно медленный, чтобы процессы столкнулись."""
+def _touch_users_in_child(path: str, chat_ids: list[int], start) -> None:
+    """Пишет своих пользователей в общую sqlite. Процессы стартуют вместе."""
     import sys
 
     root = str(Path(__file__).resolve().parents[1])
@@ -34,16 +34,26 @@ def _touch_users_in_child(path: str, chat_ids: list[int], delay: float, start) -
     import users_log as journal
 
     journal.USERS_FILE = Path(path)
-    real_replace = os.replace
-
-    def slow_replace(src, dst):
-        time.sleep(delay)
-        return real_replace(src, dst)
-
-    os.replace = slow_replace
+    journal._ready_path = None
     start.wait(15)
     for chat_id in chat_ids:
-        journal.touch_user(_message(chat_id))
+        if journal.touch_user(_message(chat_id)) is not True:
+            raise SystemExit(2)
+
+
+def _touch_same_user(path: str, times: int, start) -> None:
+    import sys
+
+    root = str(Path(__file__).resolve().parents[1])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import users_log as journal
+
+    journal.USERS_FILE = Path(path)
+    journal._ready_path = None
+    start.wait(15)
+    for _ in range(times):
+        journal.touch_user(_message(1))
 
 
 def test_touch_user_and_report_swallow_write_errors(monkeypatch, capsys):
@@ -74,16 +84,21 @@ def test_readers_swallow_load_errors(monkeypatch, capsys):
     assert "Секретноеимя" not in capsys.readouterr().out
 
 
+def _chat_ids(path: Path) -> set[int]:
+    conn = sqlite3.connect(path)
+    try:
+        return {row[0] for row in conn.execute("SELECT chat_id FROM users")}
+    finally:
+        conn.close()
+
+
 def test_two_processes_keep_every_user(tmp_path):
     path = tmp_path / "bot_users.json"
     ctx = multiprocessing.get_context("spawn")
     barrier = ctx.Barrier(2)
     groups = (list(range(1, 3)), list(range(3, 5)))
     procs = [
-        ctx.Process(
-            target=_touch_users_in_child,
-            args=(str(path), ids, 0.2, barrier),
-        )
+        ctx.Process(target=_touch_users_in_child, args=(str(path), ids, barrier))
         for ids in groups
     ]
     for proc in procs:
@@ -92,8 +107,39 @@ def test_two_processes_keep_every_user(tmp_path):
         for proc in procs:
             proc.join(30)
         assert [proc.exitcode for proc in procs] == [0, 0]
-        data = json.loads(path.read_text(encoding="utf-8"))
-        assert set(data["users"]) == {"1", "2", "3", "4"}
+        assert _chat_ids(tmp_path / "bot_users.sqlite") == {1, 2, 3, 4}
+    finally:
+        for proc in procs:
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(5)
+
+
+def test_two_processes_do_not_lose_increments(tmp_path):
+    path = tmp_path / "bot_users.json"
+    ctx = multiprocessing.get_context("spawn")
+    barrier = ctx.Barrier(2)
+    times = 8
+    procs = [
+        ctx.Process(target=_touch_same_user, args=(str(path), times, barrier))
+        for _ in range(2)
+    ]
+    for proc in procs:
+        proc.start()
+    try:
+        for proc in procs:
+            proc.join(30)
+        assert [proc.exitcode for proc in procs] == [0, 0]
+        conn = sqlite3.connect(tmp_path / "bot_users.sqlite")
+        try:
+            row = conn.execute(
+                "SELECT messages, starts FROM users WHERE chat_id=1"
+            ).fetchone()
+            total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        finally:
+            conn.close()
+        assert row == (times * 2, 0)
+        assert total == 1
     finally:
         for proc in procs:
             if proc.is_alive():
@@ -120,8 +166,15 @@ def test_corrupt_journal_is_moved_once_and_rewritten(tmp_path, monkeypatch, caps
     assert len(stamp) == len("YYYYmmdd-HHMMSS")
     assert stamp[8] == "-"
     assert "Живой" in bad[0].read_text(encoding="utf-8")
-    saved = json.loads(path.read_text(encoding="utf-8"))
-    assert "9" in saved["users"]
+    assert not path.is_file()
+    conn = sqlite3.connect(tmp_path / "bot_users.sqlite")
+    try:
+        saved = conn.execute(
+            "SELECT full_name FROM users WHERE chat_id=9"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert saved[0] == "Новый"
     assert touch_user(_message(9, first_name="Новый")) is False
     assert list(tmp_path.glob("bot_users.json.bad-*")) == bad
     logged = capsys.readouterr().out
@@ -188,34 +241,26 @@ def test_read_error_log_is_throttled_until_success_or_interval(tmp_path, monkeyp
     assert touch_user(_message(6)) is True
     assert "пропускаю" not in capsys.readouterr().out
 
+    # Журнал уже в sqlite: повторно JSON не читаем, битое чтение визит не блокирует.
     state["fail"] = True
-    assert touch_user(_message(7)) is False
+    assert touch_user(_message(7)) is True
     logged = capsys.readouterr().out
-    assert logged.count("пропускаю") == 1
+    assert "пропускаю" not in logged
     assert "Секретноеимя" not in logged
+    assert users_count() == 2
 
 
-def test_tmp_name_is_not_the_shared_one(tmp_path, monkeypatch):
-    """Общий bot_users.json.tmp ловится и при включённом flock: имя другое на каждую запись."""
+def test_visit_does_not_rewrite_json(tmp_path, monkeypatch):
+    """Живой журнал — sqlite. Общий bot_users.json.tmp больше не пишется."""
     path = tmp_path / "bot_users.json"
     monkeypatch.setattr(users_log, "USERS_FILE", path)
-    seen: list[str] = []
-    real_replace = os.replace
-
-    def spy(src, dst):
-        seen.append(Path(src).name)
-        return real_replace(src, dst)
-
-    monkeypatch.setattr(os, "replace", spy)
+    monkeypatch.setattr(users_log, "_ready_path", None)
     assert touch_user(_message(1)) is True
     assert touch_user(_message(2)) is True
-    assert len(seen) == 2
-    assert seen[0] != seen[1]
-    for name in seen:
-        assert name != "bot_users.json.tmp"
-        assert name.startswith("bot_users.json.")
-        assert name.endswith(".tmp")
-        assert str(os.getpid()) in name
+    assert list(tmp_path.glob("bot_users.json*.tmp")) == []
+    assert not path.is_file()
+    assert (tmp_path / "bot_users.sqlite").is_file()
+    assert users_count() == 2
 
 
 def test_without_fcntl_journal_still_writes(monkeypatch):
@@ -225,9 +270,86 @@ def test_without_fcntl_journal_still_writes(monkeypatch):
     assert "15" in format_users_report()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="на Windows fcntl нет, это и есть запасной путь")
-def test_lock_file_sits_next_to_journal(tmp_path, monkeypatch):
+def test_journal_is_wal_and_fully_synced(tmp_path, monkeypatch):
     path = tmp_path / "bot_users.json"
     monkeypatch.setattr(users_log, "USERS_FILE", path)
+    monkeypatch.setattr(users_log, "_ready_path", None)
     touch_user(_message(4))
-    assert (tmp_path / "bot_users.json.lock").is_file()
+    conn = sqlite3.connect(tmp_path / "bot_users.sqlite")
+    try:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        sync = conn.execute("PRAGMA synchronous").fetchone()[0]
+    finally:
+        conn.close()
+    assert str(mode).lower() == "wal"
+    assert int(sync) == 2
+    assert not (tmp_path / "bot_users.json.lock").exists()
+
+
+def test_json_backup_is_kept_and_ids_get_legacy_platform(tmp_path, monkeypatch):
+    path = tmp_path / "bot_users.json"
+    payload = json.dumps(
+        {
+            "users": {
+                "5": {
+                    "chat_id": 5,
+                    "full_name": "Живой",
+                    "username": "ok",
+                    "first_seen": "2024-01-01 00:00:00",
+                    "last_seen": "2024-06-01 12:00:00",
+                    "starts": 2,
+                    "messages": 4,
+                }
+            }
+        },
+        ensure_ascii=False,
+    )
+    path.write_text(payload, encoding="utf-8")
+    before = path.read_bytes()
+    monkeypatch.setattr(users_log, "USERS_FILE", path)
+    monkeypatch.setattr(users_log, "_ready_path", None)
+    assert users_count() == 1
+    assert path.read_bytes() == before
+    legacy = list_users()
+    assert legacy[0]["platform"] == "legacy"
+    assert legacy[0]["full_name"] == "Живой"
+    assert legacy[0]["starts"] == 2
+    assert legacy[0]["messages"] == 4
+    monkeypatch.setenv("BOT_PLATFORM", "tg")
+    assert touch_user(_message(5, first_name="Снова")) is True
+    assert path.read_bytes() == before
+    assert users_count() == 2
+    by_platform = {row["platform"]: row["full_name"] for row in list_users(limit=10)}
+    assert by_platform["legacy"] == "Живой"
+    assert by_platform["tg"] == "Снова"
+
+
+def test_same_chat_id_on_two_platforms_stays_two_rows(monkeypatch):
+    monkeypatch.setenv("BOT_PLATFORM", "tg")
+    assert touch_user(_message(5, first_name="Телеграм")) is True
+    monkeypatch.setenv("BOT_PLATFORM", "max")
+    assert touch_user(_message(5, first_name="Макс")) is True
+    assert users_count() == 2
+    got = {(row["platform"], row["full_name"]) for row in list_users(limit=10)}
+    assert got == {("tg", "Телеграм"), ("max", "Макс")}
+    report = format_users_report()
+    assert "Telegram" in report
+    assert "MAX" in report
+
+
+def test_failed_write_keeps_previous_rows(monkeypatch):
+    real_save = users_log._save
+    state = {"fail": False}
+
+    def wrapped(*args, **kwargs):
+        if state["fail"]:
+            raise OSError("disk")
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(users_log, "_save", wrapped)
+    assert touch_user(_message(1, first_name="Первый")) is True
+    state["fail"] = True
+    assert touch_user(_message(2, first_name="Второй")) is False
+    state["fail"] = False
+    assert users_count() == 1
+    assert list_users()[0]["full_name"] == "Первый"

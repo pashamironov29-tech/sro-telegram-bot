@@ -7,6 +7,7 @@ import os
 import threading
 from pathlib import Path
 
+import session_persist
 from sro_profiles import ACTIVITY_LABEL, format_activity_line, get_sro_profile
 
 # chat_id -> {"sro_id": str, "inn": str | None}
@@ -124,15 +125,105 @@ _await_joiner_activity: set[int] = set()
 _joiner_activity_by_chat: dict[int, str] = {}
 
 
+def _id_list(items) -> list[int]:
+    out: list[int] = []
+    for item in items:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(out))
+
+
+def _save_waits() -> None:
+    session_persist.save_section(
+        "sro_waits",
+        {
+            "await_inn": _id_list(_await_inn),
+            "open_main": _id_list(_open_main_after_sro),
+            "await_joiner": _id_list(_await_joiner_activity),
+            "joiner_activity": {
+                str(cid): activity for cid, activity in _joiner_activity_by_chat.items()
+            },
+            "pending_sro": {
+                str(cid): list(ids) for cid, ids in _pending_sro_pick.items()
+            },
+            "pickable_sro": {
+                str(cid): list(ids) for cid, ids in _pickable_sro_cache.items()
+            },
+        },
+    )
+
+
+def _load_id_set(raw) -> set[int]:
+    out: set[int] = set()
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        try:
+            out.add(int(item))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _load_str_map(raw) -> dict[int, str]:
+    out: dict[int, str] = {}
+    if not isinstance(raw, dict):
+        return out
+    for key, value in raw.items():
+        try:
+            cid = int(key)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, str) and value:
+            out[cid] = value
+    return out
+
+
+def _load_list_map(raw) -> dict[int, list[str]]:
+    out: dict[int, list[str]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for key, value in raw.items():
+        try:
+            cid = int(key)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, list):
+            out[cid] = [str(item) for item in value]
+    return out
+
+
+def _load_persisted() -> None:
+    raw = session_persist.load_section("sro_waits") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    _await_inn.clear()
+    _await_inn.update(_load_id_set(raw.get("await_inn")))
+    _open_main_after_sro.clear()
+    _open_main_after_sro.update(_load_id_set(raw.get("open_main")))
+    _await_joiner_activity.clear()
+    _await_joiner_activity.update(_load_id_set(raw.get("await_joiner")))
+    _joiner_activity_by_chat.clear()
+    _joiner_activity_by_chat.update(_load_str_map(raw.get("joiner_activity")))
+    _pending_sro_pick.clear()
+    _pending_sro_pick.update(_load_list_map(raw.get("pending_sro")))
+    _pickable_sro_cache.clear()
+    _pickable_sro_cache.update(_load_list_map(raw.get("pickable_sro")))
+
+
 def begin_await_inn(chat_id: int) -> None:
     _await_inn.add(chat_id)
     _open_main_after_sro.add(chat_id)
     _await_joiner_activity.discard(chat_id)
     _joiner_activity_by_chat.pop(chat_id, None)
+    _save_waits()
 
 
 def clear_await_inn(chat_id: int) -> None:
     _await_inn.discard(chat_id)
+    _save_waits()
 
 
 def is_awaiting_inn(chat_id: int) -> bool:
@@ -141,11 +232,13 @@ def is_awaiting_inn(chat_id: int) -> bool:
 
 def mark_open_main_after_sro(chat_id: int) -> None:
     _open_main_after_sro.add(chat_id)
+    _save_waits()
 
 
 def consume_open_main_after_sro(chat_id: int) -> bool:
     if chat_id in _open_main_after_sro:
         _open_main_after_sro.discard(chat_id)
+        _save_waits()
         return True
     return False
 
@@ -156,6 +249,7 @@ def clear_onboarding_flags(chat_id: int) -> None:
     _open_main_after_sro.discard(chat_id)
     _await_joiner_activity.discard(chat_id)
     _joiner_activity_by_chat.pop(chat_id, None)
+    _save_waits()
 
 
 def clear_nav_mode_flags(chat_id: int) -> None:
@@ -163,6 +257,7 @@ def clear_nav_mode_flags(chat_id: int) -> None:
     _await_inn.discard(chat_id)
     _open_main_after_sro.discard(chat_id)
     _await_joiner_activity.discard(chat_id)
+    _save_waits()
 
 
 def sro_ids_for_joiner_activity(activity: str) -> list[str]:
@@ -188,6 +283,7 @@ def begin_joiner_activity_pick(chat_id: int) -> None:
     _pickable_sro_cache.pop(chat_id, None)
     _user_context.pop(chat_id, None)
     _persist_context()
+    _save_waits()
 
 
 def begin_joiner_sro_pick(chat_id: int, activity: str) -> list[str]:
@@ -198,6 +294,7 @@ def begin_joiner_sro_pick(chat_id: int, activity: str) -> list[str]:
     _open_main_after_sro.add(chat_id)
     _pending_sro_pick[chat_id] = list(ids)
     _pickable_sro_cache[chat_id] = list(ids)
+    _save_waits()
     return ids
 
 
@@ -207,6 +304,7 @@ def is_awaiting_joiner_activity(chat_id: int) -> bool:
 
 def clear_joiner_activity_await(chat_id: int) -> None:
     _await_joiner_activity.discard(chat_id)
+    _save_waits()
 
 
 def is_joiner_flow(chat_id: int) -> bool:
@@ -290,6 +388,7 @@ def set_user_sro(chat_id: int, sro_id: str, *, inn: str | None = None) -> None:
     _user_context[chat_id] = {"sro_id": sro_id, "inn": inn}
     _pending_sro_pick.pop(chat_id, None)
     _persist_context()
+    _save_waits()
 
 
 def _set_default_sro_context(chat_id: int, sro_id: str, *, inn: str | None = None) -> None:
@@ -304,6 +403,7 @@ def clear_user_sro(chat_id: int) -> None:
     _pickable_sro_cache.pop(chat_id, None)
     clear_onboarding_flags(chat_id)
     _persist_context()
+    _save_waits()
 
 
 def pending_sro_ids(chat_id: int) -> list[str] | None:
@@ -316,6 +416,7 @@ def restore_pending_sro_pick(chat_id: int, sro_ids: list[str]) -> None:
     if sro_ids:
         _pending_sro_pick[chat_id] = list(sro_ids)
         _pickable_sro_cache[chat_id] = list(sro_ids)
+        _save_waits()
 
 
 def cached_pickable_sro_ids(chat_id: int) -> list[str] | None:
@@ -331,6 +432,7 @@ def cached_pickable_sro_ids(chat_id: int) -> list[str] | None:
         rebuilt = sro_ids_for_joiner_activity(act)
         if len(rebuilt) >= 2:
             _pickable_sro_cache[chat_id] = list(rebuilt)
+            _save_waits()
             return list(rebuilt)
     return None
 
@@ -478,11 +580,13 @@ def apply_context_from_memberships(chat_id: int, inn: str, membership_ids: list[
         ):
             set_user_sro(chat_id, current_sro, inn=inn)
             line = format_activity_line(get_sro_profile(current_sro))
+            _save_waits()
             return f"\n\n<i>Контекст СРО и бланки: {line}</i>"
 
         _pending_sro_pick[chat_id] = list(membership_ids)
         _user_context[chat_id] = {"sro_id": None, "inn": inn}
         _persist_context()
+        _save_waits()
         return (
             "\n\n⚠️ <b>Организация состоит в нескольких СРО.</b>\n"
             "Сначала выберите <b>своё СРО</b> кнопкой ниже — от этого зависят "
@@ -496,7 +600,9 @@ def apply_context_from_memberships(chat_id: int, inn: str, membership_ids: list[
         if get_sro_profile(fallback):
             set_user_sro(chat_id, fallback, inn=inn)
             line = format_activity_line(get_sro_profile(fallback))
+            _save_waits()
             return f"\n\n<i>Контекст СРО и бланки: {line}</i>"
+    _save_waits()
     return ""
 
 
@@ -505,4 +611,7 @@ def context_picker_hint(chat_id: int) -> str | None:
     if not ids or len(ids) < 2:
         return None
     return multi_sro_picker_hint(ids)
+
+
+_load_persisted()
 

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import session_persist
+
 # Пилот опроса. False = как раньше (сразу файл из реестра / пустой шаблон).
 INFO_LIST_QUIZ_ENABLED = True
 # False = только админы и контролёры (тест). True = всем, у кого есть ИНН.
@@ -120,12 +122,35 @@ def can_use_info_list_quiz(chat_id: int) -> bool:
     return bool(is_bot_admin(chat_id) or is_controller(chat_id))
 
 
+def _save_persisted() -> None:
+    session_persist.save_section(
+        "info_quiz",
+        {str(cid): sess for cid, sess in _sessions.items()},
+    )
+
+
+def _load_persisted() -> None:
+    raw = session_persist.load_section("info_quiz") or {}
+    _sessions.clear()
+    if not isinstance(raw, dict):
+        return
+    for key, sess in raw.items():
+        if not isinstance(sess, dict):
+            continue
+        try:
+            _sessions[int(key)] = sess
+        except (TypeError, ValueError):
+            continue
+
+
 def is_info_list_quiz_active(chat_id: int) -> bool:
     return chat_id in _sessions
 
 
 def cancel_info_list_quiz(chat_id: int) -> bool:
-    return _sessions.pop(chat_id, None) is not None
+    removed = _sessions.pop(chat_id, None) is not None
+    _save_persisted()
+    return removed
 
 
 def start_info_list_quiz(chat_id: int, inn: str, sro_id: str | None) -> str:
@@ -135,6 +160,7 @@ def start_info_list_quiz(chat_id: int, inn: str, sro_id: str | None) -> str:
         "sro_id": sro_id or "",
         "answers": {},
     }
+    _save_persisted()
     intro = (
         "✍️ <b>Заполним информационный лист вопросами</b> (10 штук).\n\n"
         "Из реестра уже подставлю: название, ИНН, юр. адрес, руководитель, "
@@ -273,4 +299,8 @@ def apply_info_list_quiz_answer(chat_id: int, user_text: str) -> dict[str, Any]:
         cancel_info_list_quiz(chat_id)
         return {"kind": "done", "extra": extra, "inn": inn, "sro_id": sro_id}
 
+    _save_persisted()
     return {"kind": "question", "text": STEPS[sess["step"]][1]}
+
+
+_load_persisted()

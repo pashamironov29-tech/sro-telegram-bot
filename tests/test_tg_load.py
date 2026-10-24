@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io
 import threading
 import time
 import types
@@ -473,3 +474,86 @@ def test_checko_runs_off_the_worker(monkeypatch):
         bot_FINAL_GOLD.wait_heavy_tasks()
     assert any("Ищу…" in item for item in sent)
     assert "раздел general 7700000001" in edits[-1]
+
+
+def test_send_document_retries_429_and_rewinds(monkeypatch):
+    monkeypatch.setattr(bot_FINAL_GOLD, "_retry_sleep", lambda sec: None)
+    seen: list[bytes] = []
+
+    def raw(_chat_id, document, *_args, **_kwargs):
+        seen.append(document.read())
+        if len(seen) == 1:
+            raise _tg_429(1)
+        return types.SimpleNamespace(message_id=11)
+
+    monkeypatch.setattr(bot_FINAL_GOLD, "_raw_send_document", raw)
+    payload = io.BytesIO(b"pdf-body")
+    payload.name = "pol.pdf"
+    msg = bot_FINAL_GOLD.bot.send_document(7, payload, caption="c", parse_mode="HTML")
+    assert msg.message_id == 11
+    assert seen == [b"pdf-body", b"pdf-body"]
+
+
+def test_send_document_long_429_keeps_bytes_after_close(monkeypatch):
+    monkeypatch.setattr(bot_FINAL_GOLD, "_retry_sleep", lambda _sec: None)
+    seen: list[bytes] = []
+
+    def raw(_chat_id, document, *_args, **_kwargs):
+        if not seen:
+            seen.append(b"")
+            raise _tg_429(30)
+        seen.append(document.read())
+        return types.SimpleNamespace(message_id=12)
+
+    monkeypatch.setattr(bot_FINAL_GOLD, "_raw_send_document", raw)
+    payload = io.BytesIO(b"still-here")
+    assert bot_FINAL_GOLD.bot.send_document(1, payload) is None
+    payload.close()
+    bot_FINAL_GOLD.wait_retry_tasks()
+    assert seen[-1] == b"still-here"
+
+
+def test_send_document_path_is_passed_through(monkeypatch, tmp_path):
+    pdf = tmp_path / "a.pdf"
+    pdf.write_bytes(b"xyz")
+    seen: list = []
+
+    def raw(_chat_id, document, *_args, **_kwargs):
+        seen.append(document)
+        return types.SimpleNamespace(message_id=1)
+
+    monkeypatch.setattr(bot_FINAL_GOLD, "_raw_send_document", raw)
+    bot_FINAL_GOLD.bot.send_document(1, str(pdf))
+    assert seen == [str(pdf)]
+
+
+def test_fees_doc_retries_429_instead_of_failing(monkeypatch, tmp_path):
+    pdf = tmp_path / "pol.pdf"
+    pdf.write_bytes(b"%PDF test-body")
+    monkeypatch.setattr(bot_FINAL_GOLD, "fees_doc_path", lambda _sid: str(pdf))
+    monkeypatch.setattr(bot_FINAL_GOLD, "tg_upload_document", lambda *_a, **_k: None)
+    monkeypatch.setattr(bot_FINAL_GOLD, "safe_answer_callback", lambda *_a, **_k: None)
+    monkeypatch.setattr(bot_FINAL_GOLD, "_retry_sleep", lambda *_a, **_k: None)
+    bodies: list[bytes] = []
+    texts: list[str] = []
+
+    def raw(_chat_id, document, *_args, **_kwargs):
+        bodies.append(document.read())
+        if len(bodies) == 1:
+            raise _tg_429(1)
+        return types.SimpleNamespace(message_id=3)
+
+    def send(_chat_id, text, *_args, **_kwargs):
+        texts.append(text)
+        return types.SimpleNamespace(message_id=4)
+
+    monkeypatch.setattr(bot_FINAL_GOLD, "_raw_send_document", raw)
+    monkeypatch.setattr(bot_FINAL_GOLD.bot, "send_message", send)
+    call = types.SimpleNamespace(
+        id="cb",
+        data="fees_doc:OGPS",
+        message=types.SimpleNamespace(chat=types.SimpleNamespace(id=77)),
+    )
+    bot_FINAL_GOLD.handle_fees_doc_download(call)
+    assert bodies == [b"%PDF test-body", b"%PDF test-body"]
+    assert texts == []

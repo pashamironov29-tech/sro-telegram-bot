@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 import time
 import types
@@ -244,8 +245,15 @@ def test_corrupt_users_journal_is_quarantined(tmp_path, monkeypatch):
     bad = list(path.parent.glob("bot_users.json.bad-*"))
     assert len(bad) == 1
     assert bad[0].read_text(encoding="utf-8") == original
-    saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["users"]["9"]["full_name"] == "Новый"
+    assert not path.is_file()
+    conn = sqlite3.connect(path.with_name("bot_users.sqlite"))
+    try:
+        saved = conn.execute(
+            "SELECT full_name FROM users WHERE chat_id=9"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert saved[0] == "Новый"
 
 
 def test_plan_year_is_taken_at_format_time_and_from_filename(monkeypatch, tmp_path):

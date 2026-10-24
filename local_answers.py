@@ -4,6 +4,7 @@
 import re
 from difflib import SequenceMatcher
 
+import session_persist
 from bot_disclaimers import OFFICIAL_SOURCE_DISCLAIMER, html_esc
 from partners_data import format_partner_response, match_partner_query
 from sro_site_qa import format_sro_site_qa_response, match_sro_site_qa
@@ -499,6 +500,41 @@ faq_mode_users = set()
 search_mode_users = set()
 
 
+def _mode_ids(items) -> list[int]:
+    out: list[int] = []
+    for item in items:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(out))
+
+
+def _save_answer_modes() -> None:
+    session_persist.save_section(
+        "answer_modes",
+        {"faq": _mode_ids(faq_mode_users), "search": _mode_ids(search_mode_users)},
+    )
+
+
+def _load_persisted() -> None:
+    raw = session_persist.load_section("answer_modes") or {}
+    faq_mode_users.clear()
+    search_mode_users.clear()
+    if not isinstance(raw, dict):
+        return
+    for item in raw.get("faq") or []:
+        try:
+            faq_mode_users.add(int(item))
+        except (TypeError, ValueError):
+            continue
+    for item in raw.get("search") or []:
+        try:
+            search_mode_users.add(int(item))
+        except (TypeError, ValueError):
+            continue
+
+
 def is_faq_mode(chat_id):
     return chat_id in faq_mode_users
 
@@ -506,10 +542,12 @@ def is_faq_mode(chat_id):
 def enter_faq_mode(chat_id):
     search_mode_users.discard(chat_id)
     faq_mode_users.add(chat_id)
+    _save_answer_modes()
 
 
 def exit_faq_mode(chat_id):
     faq_mode_users.discard(chat_id)
+    _save_answer_modes()
 
 
 def is_search_mode(chat_id):
@@ -519,10 +557,15 @@ def is_search_mode(chat_id):
 def enter_search_mode(chat_id):
     faq_mode_users.discard(chat_id)
     search_mode_users.add(chat_id)
+    _save_answer_modes()
 
 
 def exit_search_mode(chat_id):
     search_mode_users.discard(chat_id)
+    _save_answer_modes()
+
+
+_load_persisted()
 
 
 def _normalize(text):

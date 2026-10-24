@@ -1,6 +1,7 @@
 import telebot
 from telebot import apihelper
 from docx import Document
+import io
 import os
 from pathlib import Path
 from telebot import types
@@ -145,7 +146,7 @@ from partners_data import (
     match_partner_query,
 )
 from sro_contacts import SRO_CONTACTS, format_sro_contacts, match_sro_contact_query
-from users_log import format_users_report, is_bot_admin, touch_user, users_count
+from users_log import db_path, format_users_report, is_bot_admin, touch_user, users_count
 import national_reestr
 from national_reestr import (
     CARD_FAIL,
@@ -227,6 +228,7 @@ apihelper.READ_TIMEOUT = 60
 bot = telebot.TeleBot(BOT_TOKEN, num_threads=16)
 _raw_send_message = bot.send_message
 _raw_edit_message_text = bot.edit_message_text
+_raw_send_document = bot.send_document
 
 # Около 25 сообщений в секунду на весь бот. Всплеск — столько же, дальше ждём токен.
 TG_OUTGOING_RATE = 25.0
@@ -359,6 +361,7 @@ _national_inflight: dict[str, Future] = {}
 _national_cache_lock = threading.Lock()
 _send_guard = threading.local()
 _edit_guard = threading.local()
+_document_guard = threading.local()
 
 
 def _retry_sleep(seconds: float) -> None:
@@ -730,6 +733,75 @@ def _installed_edit_message_text(text, chat_id, message_id=None, **kwargs):
 
 bot.send_message = _installed_send_message
 bot.edit_message_text = _installed_edit_message_text
+
+
+def _document_for_retry(document):
+    """Копия файла в памяти: повтор 429 не упирается в закрытый или дочитанный handle."""
+    if isinstance(document, (bytes, bytearray, memoryview)):
+        return io.BytesIO(bytes(document))
+    if isinstance(document, str) or document is None:
+        return document
+    read = getattr(document, "read", None)
+    if not callable(read):
+        return document
+    pos = None
+    if hasattr(document, "tell") and hasattr(document, "seek"):
+        try:
+            pos = document.tell()
+        except Exception:
+            pos = None
+    data = read()
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    if pos is not None:
+        try:
+            document.seek(pos)
+        except Exception:
+            pass
+    buf = io.BytesIO(data or b"")
+    name = getattr(document, "name", None)
+    if isinstance(name, str) and name:
+        try:
+            buf.name = name
+        except Exception:
+            pass
+    return buf
+
+
+def _invoke_document(*args, **kwargs):
+    depth = getattr(_document_guard, "depth", 0)
+    _document_guard.depth = depth + 1
+    try:
+        return bot.send_document(*args, **kwargs)
+    finally:
+        _document_guard.depth = depth
+
+
+def safe_send_document(chat_id, document, *args, retries: int = 5, **kwargs):
+    """send_document с тем же повтором 429, что у текста."""
+    payload = _document_for_retry(document)
+
+    def invoke(kw):
+        if hasattr(payload, "seek"):
+            try:
+                payload.seek(0)
+            except Exception:
+                pass
+        return _invoke_document(chat_id, payload, *args, **kw)
+
+    return _send_with_retry(invoke, retries=retries, kwargs=kwargs)
+
+
+def _installed_send_document(*args, **kwargs):
+    if getattr(_document_guard, "depth", 0) > 0:
+        return _raw_send_document(*args, **kwargs)
+    if args:
+        chat_id, document, *rest = args
+        return safe_send_document(chat_id, document, *rest, **kwargs)
+    return safe_send_document(**kwargs)
+
+
+bot.send_document = _installed_send_document
 
 
 def _schedule_heavy(chat_id, produce, *, retries: int = 5, on_send_fail=None) -> None:
@@ -2816,8 +2888,9 @@ def send_users_stats(message):
         bot.send_message(
             message.chat.id,
             "⛔ Команда только для администратора бота.\n"
-            "Список пользователей лежит в файле <code>bot_users.json</code> "
-            "в папке GOLD на компьютере, где запущен бот.",
+            "Список пользователей лежит в файле <code>bot_users.sqlite</code> "
+            "в папке GOLD на компьютере, где запущен бот. "
+            "Старый <code>bot_users.json</code> — копия до переноса, бот его не переписывает.",
             parse_mode="HTML",
         )
         return
@@ -4032,14 +4105,14 @@ def handle_inline_search(call):
         safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.14.6"
+    BOT_VERSION = "1.14.7"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 
     if install_for_bot():
         print("💤 Автосон Windows отключён, пока бот запущен (Ctrl+C — выход).", flush=True)
     print(f"🚀 Бот запускается... ({BOT_VERSION})", flush=True)
-    print(f"👥 В журнале пользователей: {users_count()} (файл bot_users.json)", flush=True)
+    print(f"👥 В журнале пользователей: {users_count()} (файл {db_path().name})", flush=True)
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=20)

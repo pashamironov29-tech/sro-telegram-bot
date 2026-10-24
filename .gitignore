@@ -19,6 +19,11 @@ bot_users.json
 bot_users.json.lock
 bot_users.json.*.tmp
 bot_users.json.bad-*
+bot_users.sqlite
+bot_users.sqlite-wal
+bot_users.sqlite-shm
+session_state_*.json
+session_state_*.json.*.tmp
 user_sro_context.json
 contacts_access.json
 feedback_questions.jsonl
