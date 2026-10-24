@@ -179,6 +179,25 @@ def max_bot(max_module, monkeypatch, sample_reestr):
     return harness
 
 
+@pytest.fixture(autouse=True)
+def _telegram_load_helpers_idle():
+    """Лимитер отправки не растягивает чужие тесты. Кэш поиска не протекает."""
+    import sys
+
+    mod = sys.modules.get("bot_FINAL_GOLD")
+    if mod is None:
+        yield
+        return
+    original = mod._outgoing_limiter.acquire
+    mod._outgoing_limiter.acquire = lambda: None
+    mod.clear_national_query_cache()
+    try:
+        yield
+    finally:
+        mod._outgoing_limiter.acquire = original
+        mod.clear_national_query_cache()
+
+
 @pytest.fixture
 def max_controller(config_stub, monkeypatch):
     """Включить тестового пользователя в контролёры MAX подменой конфига в памяти."""

@@ -205,6 +205,13 @@ def test_stale_callback_still_sends_company_card(monkeypatch):
 
 def test_checko_section_error_is_caught(monkeypatch):
     sent = _capture_tg_send(monkeypatch)
+    edits: list[str] = []
+
+    def edit(text, chat_id, message_id, **kwargs):
+        edits.append(text or "")
+        return types.SimpleNamespace(message_id=message_id)
+
+    monkeypatch.setattr(bot_FINAL_GOLD.bot, "edit_message_text", edit)
     monkeypatch.setattr(bot_FINAL_GOLD, "can_use_checko", lambda _cid: True)
 
     def boom(_section, _inn):
@@ -220,7 +227,9 @@ def test_checko_section_error_is_caught(monkeypatch):
         ),
     )
     bot_FINAL_GOLD.handle_checko_callbacks(call)
-    blob = "\n".join(sent)
+    bot_FINAL_GOLD.wait_heavy_tasks()
+    blob = "\n".join(sent + edits)
+    assert "Ищу…" in blob
     assert "Не удалось загрузить раздел" in blob
     assert "внутренней ошибке" not in blob
 
@@ -238,6 +247,11 @@ def test_checko_log_does_not_print_chat_id(capsys, monkeypatch):
     )
     monkeypatch.setattr(bot_FINAL_GOLD.bot, "answer_callback_query", lambda *_a, **_k: None)
     monkeypatch.setattr(bot_FINAL_GOLD.bot, "send_chat_action", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        bot_FINAL_GOLD.bot,
+        "edit_message_text",
+        lambda *_a, **_k: None,
+    )
     for data in ("chk:f:7700000001", "chk:s:legal:7700000001"):
         call = types.SimpleNamespace(
             id="cb",
@@ -247,6 +261,7 @@ def test_checko_log_does_not_print_chat_id(capsys, monkeypatch):
             ),
         )
         bot_FINAL_GOLD.handle_checko_callbacks(call)
+    bot_FINAL_GOLD.wait_heavy_tasks()
     out = capsys.readouterr().out
     assert "chk:f" in out and "chk:s" in out
     assert str(chat_id) not in out
