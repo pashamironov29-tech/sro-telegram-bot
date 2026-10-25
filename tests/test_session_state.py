@@ -87,3 +87,34 @@ def test_info_quiz_and_feedback_wait_survive_restart():
     feedback_log._load_persisted()
     assert feedback_log.is_awaiting_expected(8) is True
     assert feedback_log.has_last_ai(8) is True
+
+
+def test_controller_mode_is_loaded_on_module_import(monkeypatch, config_stub):
+    import importlib
+
+    monkeypatch.setattr(config_stub, "MAX_CONTROLLER_IDS", [42])
+    monkeypatch.setattr(config_stub, "CONTROLLER_CHAT_IDS", [99])
+    enter_controller_work_mode(42)
+    try:
+        fresh = importlib.reload(controller_access)
+        assert 42 in fresh._controller_work_mode
+    finally:
+        controller_access._controller_work_mode.clear()
+
+
+def test_state_file_name_depends_on_platform():
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(session_persist.__file__).resolve().parent
+    names = {}
+    for plat in ("tg", "max"):
+        env = dict(os.environ, BOT_PLATFORM=plat)
+        out = subprocess.run(
+            [sys.executable, "-c", "import session_persist as s; print(s.STATE_FILE.name)"],
+            cwd=root, env=env, capture_output=True, text=True, timeout=60, check=True,
+        )
+        names[plat] = out.stdout.strip().splitlines()[-1]
+    assert names == {"tg": "session_state_tg.json", "max": "session_state_max.json"}

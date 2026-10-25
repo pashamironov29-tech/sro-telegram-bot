@@ -353,3 +353,59 @@ def test_failed_write_keeps_previous_rows(monkeypatch):
     state["fail"] = False
     assert users_count() == 1
     assert list_users()[0]["full_name"] == "Первый"
+
+
+def test_update_touches_only_its_own_row(monkeypatch):
+    monkeypatch.setenv("BOT_PLATFORM", "max")
+    assert touch_user(_message(1, first_name="Первый")) is True
+    assert touch_user(_message(2, first_name="Второй")) is True
+    assert touch_user(_message(1, first_name="Первый-2")) is False
+    got = {row["chat_id"]: (row["full_name"], row["starts"]) for row in list_users(limit=10)}
+    assert got[1][0] == "Первый-2"
+    assert got[2][0] == "Второй"
+    assert users_count() == 2
+
+
+def test_every_connection_is_wal_and_synchronous_full(monkeypatch):
+    seen = []
+    real = users_log._connect
+
+    def spy():
+        conn = real()
+        seen.append(
+            (
+                str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower(),
+                int(conn.execute("PRAGMA synchronous").fetchone()[0]),
+            )
+        )
+        return conn
+
+    monkeypatch.setattr(users_log, "_connect", spy)
+    assert touch_user(_message(9)) is True
+    users_count()
+    assert seen
+    assert all(item == ("wal", 2) for item in seen)
+
+
+def test_json_is_imported_only_once(tmp_path, monkeypatch):
+    path = tmp_path / "bot_users.json"
+    path.write_text(
+        json.dumps({"users": {"1": {"chat_id": 1, "full_name": "A", "starts": 1}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(users_log, "USERS_FILE", path)
+    monkeypatch.setattr(users_log, "_ready_path", None)
+    assert users_count() == 1
+    path.write_text(
+        json.dumps(
+            {
+                "users": {
+                    "1": {"chat_id": 1, "full_name": "A", "starts": 1},
+                    "2": {"chat_id": 2, "full_name": "B", "starts": 1},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(users_log, "_ready_path", None)
+    assert users_count() == 1
