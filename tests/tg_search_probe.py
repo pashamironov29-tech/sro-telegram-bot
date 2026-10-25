@@ -80,6 +80,10 @@ def main(tmp_dir: str) -> None:
     support.install_config_stub(str(tmp / "sro files"))
     support.block_network()
 
+    import session_persist
+
+    session_persist.STATE_FILE = tmp / "session_state_tg.json"
+
     import feedback_log
     import local_answers
     import log_redact
@@ -104,6 +108,10 @@ def main(tmp_dir: str) -> None:
         import bot_FINAL_GOLD as tg
     finally:
         log_redact.install_secret_log_redaction = original_install
+
+    import national_reestr
+
+    national_reestr._MODE_FILE = str(tmp / "national_mode_tg.json")
 
     tg.reestr_database = support.sample_reestr()
     tg.sro_database = {}

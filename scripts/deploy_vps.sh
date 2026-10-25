@@ -40,6 +40,7 @@ EXCLUDES=(
   'logs/'
   '*.log'
   'bot_users.json*'
+  'session_state_*'
   'user_sro_context.json'
   'contacts_access.json'
   'reestr_cache.json*'

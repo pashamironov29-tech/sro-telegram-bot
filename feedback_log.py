@@ -6,6 +6,8 @@ import json
 import time
 from pathlib import Path
 
+import session_persist
+
 ROOT = Path(__file__).resolve().parent
 FEEDBACK_FILE = ROOT / "feedback_questions.jsonl"
 
@@ -27,6 +29,40 @@ FB_PHRASES = (
 )
 
 
+def _save_persisted() -> None:
+    session_persist.save_section(
+        "feedback",
+        {
+            "await": {str(cid): ts for cid, ts in _await_expected.items()},
+            "last": {str(cid): row for cid, row in _last_ai.items()},
+        },
+    )
+
+
+def _load_persisted() -> None:
+    raw = session_persist.load_section("feedback") or {}
+    _await_expected.clear()
+    _last_ai.clear()
+    if not isinstance(raw, dict):
+        return
+    await_raw = raw.get("await")
+    if isinstance(await_raw, dict):
+        for key, value in await_raw.items():
+            try:
+                _await_expected[int(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+    last_raw = raw.get("last")
+    if isinstance(last_raw, dict):
+        for key, value in last_raw.items():
+            if not isinstance(value, dict):
+                continue
+            try:
+                _last_ai[int(key)] = value
+            except (TypeError, ValueError):
+                continue
+
+
 def remember_ai_reply(
     chat_id: int,
     *,
@@ -45,6 +81,7 @@ def remember_ai_reply(
         "sro_id": sro_id,
         "ts": time.time(),
     }
+    _save_persisted()
 
 
 def _fresh_last_ai(chat_id: int) -> dict | None:
@@ -58,6 +95,7 @@ def _fresh_last_ai(chat_id: int) -> dict | None:
     if age > LAST_AI_TTL_SEC:
         _last_ai.pop(chat_id, None)
         _await_expected.pop(chat_id, None)
+        _save_persisted()
         return None
     return last
 
@@ -72,6 +110,7 @@ def is_awaiting_expected(chat_id: int) -> bool:
         return False
     if time.time() - started > AWAIT_TTL_SEC:
         _await_expected.pop(chat_id, None)
+        _save_persisted()
         return False
     return True
 
@@ -81,11 +120,13 @@ def begin_await_expected(chat_id: int) -> bool:
     if _fresh_last_ai(chat_id) is None:
         return False
     _await_expected[chat_id] = time.time()
+    _save_persisted()
     return True
 
 
 def cancel_await_expected(chat_id: int) -> None:
     _await_expected.pop(chat_id, None)
+    _save_persisted()
 
 
 def is_feedback_phrase(text: str) -> bool:
@@ -98,6 +139,7 @@ def append_feedback(chat_id: int, expected: str | None) -> bool:
     last = _fresh_last_ai(chat_id)
     if not last:
         _await_expected.pop(chat_id, None)
+        _save_persisted()
         return False
     row = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
@@ -111,4 +153,8 @@ def append_feedback(chat_id: int, expected: str | None) -> bool:
     with FEEDBACK_FILE.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
     _await_expected.pop(chat_id, None)
+    _save_persisted()
     return True
+
+
+_load_persisted()

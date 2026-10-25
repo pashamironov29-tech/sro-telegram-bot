@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import os
 
+import session_persist
+
 # Активный «кабинет контролёра» (после /controller).
 # /start и смена организации выключают — тогда UX как у члена СРО (без Checko).
+# Снимок на диске — отдельно для Telegram и MAX, переживает перезапуск.
 _controller_work_mode: set[int] = set()
 
 
@@ -70,18 +73,36 @@ def is_controller(chat_id: int) -> bool:
     return cid in controller_chat_ids()
 
 
+def _load_persisted() -> None:
+    raw = session_persist.load_section("controller") or []
+    _controller_work_mode.clear()
+    if not isinstance(raw, list):
+        return
+    for item in raw:
+        try:
+            _controller_work_mode.add(int(item))
+        except (TypeError, ValueError):
+            continue
+
+
+def _save_persisted() -> None:
+    session_persist.save_section("controller", sorted(_controller_work_mode))
+
+
 def enter_controller_work_mode(chat_id: int) -> None:
     try:
         _controller_work_mode.add(int(chat_id))
     except (TypeError, ValueError):
-        pass
+        return
+    _save_persisted()
 
 
 def exit_controller_work_mode(chat_id: int) -> None:
     try:
         _controller_work_mode.discard(int(chat_id))
     except (TypeError, ValueError):
-        pass
+        return
+    _save_persisted()
 
 
 def is_controller_work_mode(chat_id: int) -> bool:
@@ -96,3 +117,6 @@ def is_controller_work_mode(chat_id: int) -> bool:
 def can_use_checko(chat_id: int) -> bool:
     """Checko и развилка «полная информация» — только в кабинете контролёра."""
     return is_controller_work_mode(chat_id)
+
+
+_load_persisted()

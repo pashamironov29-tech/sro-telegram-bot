@@ -34,10 +34,12 @@ import pytest  # noqa: E402
 
 import controller_access  # noqa: E402
 import feedback_log  # noqa: E402
+import info_list_quiz  # noqa: E402
 import local_answers  # noqa: E402
 import national_reestr  # noqa: E402
 import nrs_search_links  # noqa: E402
 import reestr_sync  # noqa: E402
+import session_persist  # noqa: E402
 import specialist_reestr  # noqa: E402
 import sro_context  # noqa: E402
 import users_log  # noqa: E402
@@ -58,6 +60,7 @@ _STATE_CONTAINERS = (
     sro_context._joiner_activity_by_chat,
     feedback_log._last_ai,
     feedback_log._await_expected,
+    info_list_quiz._sessions,
 )
 
 
@@ -71,6 +74,10 @@ def _reset_state() -> None:
 def isolated_files(tmp_path, monkeypatch):
     """Ничего не пишем в рабочий каталог: журналы, контексты и кэш — во временную папку."""
     monkeypatch.setattr(users_log, "USERS_FILE", tmp_path / "bot_users.json")
+    monkeypatch.setattr(users_log, "_ready_path", None)
+    monkeypatch.setattr(users_log, "_corrupt_warned", False)
+    monkeypatch.setattr(users_log, "_read_error_logged_at", None)
+    monkeypatch.setattr(session_persist, "STATE_FILE", tmp_path / "session_state_max.json")
     monkeypatch.setattr(sro_context, "_CONTEXT_FILE", tmp_path / "user_sro_context_max.json")
     monkeypatch.setattr(nrs_search_links, "_MODE_FILE", str(tmp_path / "nrs_link_mode_max.json"))
     monkeypatch.setattr(specialist_reestr, "_MODE_FILE", str(tmp_path / "specialist_mode_max.json"))

@@ -48,7 +48,9 @@ python bot_MAX.py
 
 На Windows: `START_BOT.ps1` / `START_BOT.bat` (Telegram), `START_BOT_MAX.ps1` / `START_BOT_MAX.bat` (MAX).
 
-Telegram и MAX пишут один `bot_users.json`. На Linux процессы разводит lock-файл. На Windows `fcntl` нет: два бота одновременно делят журнал без межпроцессной блокировки, часть записей может потеряться.
+Telegram и MAX пишут один журнал `bot_users.sqlite` (SQLite, WAL). У строки есть площадка `tg` или `max`: одинаковый числовой id в двух мессенджерах — разные люди. Старый `bot_users.json` при первом запуске переносится в базу и остаётся на диске как копия, бот его больше не переписывает.
+
+Кабинет контролёра и ожидания ввода (поиск, FAQ, ИНН, опрос инфолиста, фраза «какой ответ ждали») лежат в `session_state_tg.json` и `session_state_max.json` и переживают перезапуск процесса.
 
 Разово снять порог «меньше половины» у синка специалистов: `python specialist_sync.py --allow-prune OGPS` (флаг можно повторить). Переменную `SPECIALIST_ALLOW_PRUNE` в unit-файл `sro-specialist-sync.service` насовсем не прописывать — ночной синк иначе будет удалять членов при каждом коротком списке.
 
@@ -60,7 +62,7 @@ Telegram и MAX пишут один `bot_users.json`. На Linux процесс�
 | `contacts_data.py` | телефоны и почты сотрудников (скопируйте `contacts_data.example.py`) |
 | `reestr_cache.json` | кэш реестра, собирается скриптом |
 | `sro files/` | бланки и внутренние PDF |
-| логи, `bot_users.json` | эксплуатационные данные |
+| логи, `bot_users.json`, `bot_users.sqlite` | эксплуатационные данные |
 
 ## Структура репозитория
 
