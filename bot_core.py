@@ -2,13 +2,12 @@
 """Общее ядро режимов и гейтов для Telegram и MAX.
 
 Оболочки (bot_FINAL_GOLD / bot_MAX) рисуют клавиатуры и шлют сообщения.
-Смена режимов и проверка прав контролёра — только здесь, чтобы TG и MAX
+Смена режимов — только здесь, чтобы TG и MAX
 не разъезжались снова.
 """
 
 from __future__ import annotations
 
-from controller_access import exit_controller_work_mode, enter_controller_work_mode
 from local_answers import (
     enter_faq_mode,
     enter_search_mode,
@@ -34,9 +33,8 @@ def clear_chat_modes(
     nrs: bool = True,
     specialist: bool = True,
     national: bool = True,
-    controller_work: bool = False,
 ) -> None:
-    """Сбросить выбранные режимы. controller_work по умолчанию не трогаем."""
+    """Сбросить выбранные режимы."""
     if faq:
         exit_faq_mode(chat_id)
     if search:
@@ -47,24 +45,16 @@ def clear_chat_modes(
         exit_specialist_mode(chat_id)
     if national:
         exit_national_mode(chat_id)
-    if controller_work:
-        exit_controller_work_mode(chat_id)
 
 
 def prepare_welcome_reset(chat_id: int) -> None:
-    """ /start — полный сброс, включая кабинет контролёра."""
-    clear_chat_modes(chat_id, controller_work=True)
+    """ /start — полный сброс режимов."""
+    clear_chat_modes(chat_id)
 
 
 def prepare_main_menu(chat_id: int) -> None:
-    """«Назад в меню» — выйти из поиска и НРС, кабинет контролёра оставить."""
-    clear_chat_modes(chat_id, controller_work=False)
-
-
-def prepare_controller_menu(chat_id: int) -> None:
-    """Открыть кабинет /controller."""
-    clear_chat_modes(chat_id, controller_work=False)
-    enter_controller_work_mode(chat_id)
+    """«Назад в меню» — выйти из поиска и НРС."""
+    clear_chat_modes(chat_id)
 
 
 def prepare_faq(chat_id: int) -> None:
@@ -74,7 +64,6 @@ def prepare_faq(chat_id: int) -> None:
         faq=False,
         search=True,
         nrs=True,
-        controller_work=False,
     )
     enter_faq_mode(chat_id)
 
@@ -85,7 +74,6 @@ def prepare_search(chat_id: int) -> None:
         faq=True,
         search=False,
         nrs=True,
-        controller_work=False,
     )
     enter_search_mode(chat_id)
 
@@ -97,7 +85,6 @@ def prepare_nrs(chat_id: int) -> None:
         search=True,
         nrs=False,
         specialist=True,
-        controller_work=False,
     )
     enter_nrs_link_mode(chat_id)
 
@@ -110,7 +97,6 @@ def prepare_specialist(chat_id: int) -> None:
         search=True,
         nrs=True,
         specialist=False,
-        controller_work=False,
     )
     enter_specialist_mode(chat_id)
 
@@ -124,7 +110,6 @@ def prepare_national(chat_id: int) -> None:
         nrs=True,
         specialist=True,
         national=False,
-        controller_work=False,
     )
     enter_national_mode(chat_id)
 

@@ -15,7 +15,7 @@ import bot_FINAL_GOLD as tg  # noqa: E402
 log_redact.install_secret_log_redaction = _real_install
 
 NEW_LABELS = [
-    "🔎 Поиск организации в СРО",
+    "🔎 Поиск организации в СРО / Checko",
     "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)",
     "👤 Где работает специалист (по ФИО)",
     "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ",
@@ -24,6 +24,7 @@ NEW_LABELS = [
 # старые подписи -> новая (клавиатура у пользователя может быть старой)
 LEGACY = {
     "🔍 Поиск организации": NEW_LABELS[0],
+    "🔎 Поиск организации в СРО": NEW_LABELS[0],
     "👤 Проверить в НРС": NEW_LABELS[1],
     "👤 НРС ссылка (пилот)": NEW_LABELS[1],
     "🔎 Поиск специалиста по ФИО": NEW_LABELS[2],
@@ -65,8 +66,23 @@ def test_main_keyboard_is_four_full_width_buttons():
     assert markup.resize_keyboard is True
 
 
-def test_controller_keyboard_same_four_buttons():
-    assert _rows(tg.get_controller_keyboard(818181)) == [[label] for label in NEW_LABELS]
+def test_no_fifth_button_for_anyone():
+    for chat_id in (818181, 1, 123456789):
+        assert len(_rows(tg.get_main_keyboard(chat_id))) == 4
+    assert not hasattr(tg, "get_controller_keyboard")
+
+
+def test_checko_is_not_a_main_menu_button():
+    labels = [row[0] for row in _rows(tg.get_main_keyboard(818181))]
+    assert not any(label.startswith("📋") for label in labels)
+    assert tg.CHECKO_CARD_BUTTON == "📋 Проверить в Checko"
+
+
+def test_checko_card_keyboard_is_inline_for_everyone():
+    markup = tg.get_checko_card_keyboard("7700000001")
+    buttons = [b for row in markup.keyboard for b in row]
+    assert [b.text for b in buttons] == ["📋 Проверить в Checko"]
+    assert buttons[0].callback_data == "chk:f:7700000001"
 
 
 def test_constants_match_labels():

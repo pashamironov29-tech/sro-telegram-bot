@@ -384,11 +384,6 @@ def test_max_button_opens_search_and_list(max_bot, monkeypatch):
     assert national_reestr.is_national_mode(TEST_UID)
     labels = [text for _k, text, payload in keyboard_buttons(max_bot.m.main_keyboard(TEST_UID))]
     assert "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ" in labels
-    ctrl = [
-        payload
-        for _k, _t, payload in keyboard_buttons(max_bot.m.controller_keyboard(TEST_UID))
-    ]
-    assert "menu:nat" in ctrl
 
     max_bot.clear()
 
@@ -435,11 +430,6 @@ def test_tg_menu_has_button_and_handles_query(monkeypatch):
         for button in row:
             labels.append(button["text"] if isinstance(button, dict) else button.text)
     assert bot_FINAL_GOLD.NATIONAL_BUTTON in labels
-    ctrl_labels = []
-    for row in bot_FINAL_GOLD.get_controller_keyboard(chat_id).keyboard:
-        for button in row:
-            ctrl_labels.append(button["text"] if isinstance(button, dict) else button.text)
-    assert bot_FINAL_GOLD.NATIONAL_BUTTON in ctrl_labels
 
     bot_FINAL_GOLD.handle_text(
         types.SimpleNamespace(

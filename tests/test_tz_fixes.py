@@ -212,7 +212,6 @@ def test_checko_section_error_is_caught(monkeypatch):
         return types.SimpleNamespace(message_id=message_id)
 
     monkeypatch.setattr(bot_FINAL_GOLD.bot, "edit_message_text", edit)
-    monkeypatch.setattr(bot_FINAL_GOLD, "can_use_checko", lambda _cid: True)
 
     def boom(_section, _inn):
         raise RuntimeError("checko down")
@@ -236,7 +235,6 @@ def test_checko_section_error_is_caught(monkeypatch):
 
 def test_checko_log_does_not_print_chat_id(capsys, monkeypatch):
     chat_id = 900000111
-    monkeypatch.setattr(bot_FINAL_GOLD, "can_use_checko", lambda _cid: True)
     monkeypatch.setattr(
         bot_FINAL_GOLD, "format_checko_section", lambda _section, _inn: "раздел"
     )

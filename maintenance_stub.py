@@ -40,7 +40,7 @@ def _reply(chat_id: int) -> None:
         logging.exception("send_message failed chat_id=%s", chat_id)
 
 
-@bot.message_handler(commands=["start", "help", "search", "info", "controller", "users"])
+@bot.message_handler(commands=["start", "help", "search", "info", "users"])
 def on_cmd(message: types.Message) -> None:
     _reply(message.chat.id)
 

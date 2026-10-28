@@ -162,7 +162,7 @@ def check_menu_routes() -> None:
             ("menu:search", "ИНН"),
             ("menu:info", "Полезная информация"),
             ("menu:help", "Справка"),
-            ("menu:controller", "Меню контролёра"),
+            ("menu:controller", "Главное меню"),
             ("menu:nrs", "НРС"),
             ("menu:spec", "ФИО"),
             ("menu:nat", "НОСТРОЙ"),
@@ -327,10 +327,10 @@ def check_start_search_commands() -> None:
             ok("/search → поиск ИНН")
         captured.clear()
         m.handle_text(uid, "/controller", fake)
-        if "контролёр" not in "\n".join(captured).lower() and "контролер" not in "\n".join(captured).lower():
+        if "контролёр" in "\n".join(captured).lower() or "контролер" in "\n".join(captured).lower():
             fail(f"/controller: {captured[:1]}")
         else:
-            ok("/controller → меню контролёра")
+            ok("/controller → обычное главное меню")
         captured.clear()
         m.handle_text(uid, "/info", fake)
         if "Полезная информация" not in "\n".join(captured):

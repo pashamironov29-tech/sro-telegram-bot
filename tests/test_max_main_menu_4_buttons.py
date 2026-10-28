@@ -8,7 +8,7 @@ from menu_labels import LEGACY_MENU_ALIASES, MENU_LABELS
 from tests.support import TEST_UID, keyboard_buttons
 
 NEW_LABELS = [
-    "🔎 Поиск организации в СРО",
+    "🔎 Поиск организации в СРО / Checko",
     "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)",
     "👤 Где работает специалист (по ФИО)",
     "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ",
@@ -34,9 +34,21 @@ def test_main_keyboard_four_full_width_rows(max_bot):
     assert rows == [[(l, p)] for l, p in zip(NEW_LABELS, PAYLOADS)]
 
 
-def test_controller_keyboard_same_four_rows(max_bot):
-    kb = max_bot.m.controller_keyboard(TEST_UID)
-    assert _rows(kb) == [[(l, p)] for l, p in zip(NEW_LABELS, PAYLOADS)]
+def test_no_fifth_button_and_no_controller_menu(max_bot):
+    assert len(_rows(max_bot.m.main_keyboard(TEST_UID))) == 4
+    assert len(_rows(max_bot.m.main_keyboard(1))) == 4
+    assert not hasattr(max_bot.m, "controller_keyboard")
+
+
+def test_card_keyboard_adds_checko_row_above_four_buttons(max_bot, config_stub, monkeypatch):
+    monkeypatch.setattr(config_stub, "CHECKO_API_KEY", "test-fake-checko-key")
+    rows = _rows(max_bot.m.card_keyboard("7700000001"))
+    assert rows[0] == [("📋 Проверить в Checko", "chk:f:7700000001")]
+    assert rows[1:] == [[(l, p)] for l, p in zip(NEW_LABELS, PAYLOADS)]
+
+
+def test_old_search_label_is_alias():
+    assert LEGACY_MENU_ALIASES["🔎 Поиск организации в СРО"] == NEW_LABELS[0]
 
 
 @pytest.mark.parametrize("label", NEW_LABELS)

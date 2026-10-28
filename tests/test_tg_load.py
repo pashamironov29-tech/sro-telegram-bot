@@ -435,7 +435,6 @@ def test_checko_runs_off_the_worker(monkeypatch):
     edits: list[str] = []
     gate = threading.Event()
     seen: dict = {}
-    monkeypatch.setattr(bot_FINAL_GOLD, "can_use_checko", lambda _cid: True)
     monkeypatch.setattr(bot_FINAL_GOLD.bot, "answer_callback_query", lambda *_a, **_k: None)
 
     def send(_chat_id, text, **_kwargs):

@@ -1,47 +1,14 @@
-"""Кабинет контролёра и ожидания ввода переживают перезапуск процесса."""
+"""Ожидания ввода переживают перезапуск процесса."""
 
 from __future__ import annotations
 
-import controller_access
 import feedback_log
 import info_list_quiz
 import local_answers
 import session_persist
 import sro_context
-from controller_access import (
-    enter_controller_work_mode,
-    exit_controller_work_mode,
-    is_controller_work_mode,
-)
 from info_list_quiz import apply_info_list_quiz_answer, start_info_list_quiz
 from local_answers import enter_search_mode, is_search_mode
-
-
-def test_controller_mode_survives_restart_and_stays_on_its_platform(monkeypatch, tmp_path, config_stub):
-    monkeypatch.setattr(config_stub, "MAX_CONTROLLER_IDS", [42])
-    monkeypatch.setattr(config_stub, "CONTROLLER_CHAT_IDS", [99])
-    max_file = session_persist.STATE_FILE
-    enter_controller_work_mode(42)
-    assert is_controller_work_mode(42) is True
-
-    controller_access._controller_work_mode.clear()
-    assert is_controller_work_mode(42) is False
-    controller_access._load_persisted()
-    assert is_controller_work_mode(42) is True
-
-    monkeypatch.setattr(session_persist, "STATE_FILE", tmp_path / "session_state_tg.json")
-    controller_access._controller_work_mode.clear()
-    controller_access._load_persisted()
-    assert 42 not in controller_access._controller_work_mode
-
-    monkeypatch.setattr(session_persist, "STATE_FILE", max_file)
-    controller_access._load_persisted()
-    assert is_controller_work_mode(42) is True
-
-    exit_controller_work_mode(42)
-    controller_access._controller_work_mode.add(42)
-    controller_access._load_persisted()
-    assert 42 not in controller_access._controller_work_mode
 
 
 def test_search_inn_and_joiner_waits_survive_restart():
@@ -87,19 +54,6 @@ def test_info_quiz_and_feedback_wait_survive_restart():
     feedback_log._load_persisted()
     assert feedback_log.is_awaiting_expected(8) is True
     assert feedback_log.has_last_ai(8) is True
-
-
-def test_controller_mode_is_loaded_on_module_import(monkeypatch, config_stub):
-    import importlib
-
-    monkeypatch.setattr(config_stub, "MAX_CONTROLLER_IDS", [42])
-    monkeypatch.setattr(config_stub, "CONTROLLER_CHAT_IDS", [99])
-    enter_controller_work_mode(42)
-    try:
-        fresh = importlib.reload(controller_access)
-        assert 42 in fresh._controller_work_mode
-    finally:
-        controller_access._controller_work_mode.clear()
 
 
 def test_state_file_name_depends_on_platform():

@@ -1,15 +1,13 @@
-"""Доступ к упрощённому меню для контролёров СРО (без онбординга вступающих)."""
+"""Список chat_id для рассылки /notify_update.
+
+Раньше здесь же жил кабинет контролёра (/controller, доступ к Checko).
+Он убран: все кнопки доступны всем. Остался только список получателей
+админской рассылки (ключ CONTROLLER_CHAT_IDS в config_keys, как раньше).
+"""
 
 from __future__ import annotations
 
 import os
-
-import session_persist
-
-# Активный «кабинет контролёра» (после /controller).
-# /start и смена организации выключают — тогда UX как у члена СРО (без Checko).
-# Снимок на диске — отдельно для Telegram и MAX, переживает перезапуск.
-_controller_work_mode: set[int] = set()
 
 
 def _bot_platform() -> str:
@@ -39,11 +37,10 @@ def _normalize_ids(v) -> list[int]:
 
 
 def controller_chat_ids() -> list[int]:
-    """Список контролёров текущей платформы (BOT_PLATFORM=tg|max).
+    """Получатели рассылки текущей платформы (BOT_PLATFORM=tg|max).
 
     TG: CONTROLLER_CHAT_IDS, если ключа нет — BOT_ADMIN_IDS.
-    MAX: только MAX_CONTROLLER_IDS (без слияния с TG и без фолбэка на админов).
-    Пустой список [] не подменяет админами.
+    MAX: только MAX_CONTROLLER_IDS. Пустой список [] админами не подменяется.
     """
     try:
         import config_keys as ck
@@ -63,60 +60,3 @@ def controller_chat_ids() -> list[int]:
     except Exception:
         raw = []
     return list(dict.fromkeys(_normalize_ids(raw)))
-
-
-def is_controller(chat_id: int) -> bool:
-    try:
-        cid = int(chat_id)
-    except (TypeError, ValueError):
-        return False
-    return cid in controller_chat_ids()
-
-
-def _load_persisted() -> None:
-    raw = session_persist.load_section("controller") or []
-    _controller_work_mode.clear()
-    if not isinstance(raw, list):
-        return
-    for item in raw:
-        try:
-            _controller_work_mode.add(int(item))
-        except (TypeError, ValueError):
-            continue
-
-
-def _save_persisted() -> None:
-    session_persist.save_section("controller", sorted(_controller_work_mode))
-
-
-def enter_controller_work_mode(chat_id: int) -> None:
-    try:
-        _controller_work_mode.add(int(chat_id))
-    except (TypeError, ValueError):
-        return
-    _save_persisted()
-
-
-def exit_controller_work_mode(chat_id: int) -> None:
-    try:
-        _controller_work_mode.discard(int(chat_id))
-    except (TypeError, ValueError):
-        return
-    _save_persisted()
-
-
-def is_controller_work_mode(chat_id: int) -> bool:
-    """True только если ID контролёра и открыт кабинет (/controller)."""
-    try:
-        cid = int(chat_id)
-    except (TypeError, ValueError):
-        return False
-    return cid in controller_chat_ids() and cid in _controller_work_mode
-
-
-def can_use_checko(chat_id: int) -> bool:
-    """Checko и развилка «полная информация» — только в кабинете контролёра."""
-    return is_controller_work_mode(chat_id)
-
-
-_load_persisted()

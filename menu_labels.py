@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-SEARCH_ORG_BUTTON = "🔎 Поиск организации в СРО"
+SEARCH_ORG_BUTTON = "🔎 Поиск организации в СРО / Checko"
+CHECKO_CARD_BUTTON = "📋 Проверить в Checko"  # под карточкой организации, не в главном меню
 NRS_LINK_BUTTON = "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)"
 SPECIALIST_BUTTON = "👤 Где работает специалист (по ФИО)"
 NATIONAL_BUTTON = "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ"
@@ -15,6 +16,7 @@ MENU_LABELS = (SEARCH_ORG_BUTTON, NRS_LINK_BUTTON, SPECIALIST_BUTTON, NATIONAL_B
 
 LEGACY_MENU_ALIASES = {
     "🔍 Поиск организации": SEARCH_ORG_BUTTON,
+    "🔎 Поиск организации в СРО": SEARCH_ORG_BUTTON,  # подпись 1.14.8–1.14.9
     "👤 Проверить в НРС": NRS_LINK_BUTTON,
     "👤 НРС ссылка (пилот)": NRS_LINK_BUTTON,
     "🔎 Поиск специалиста по ФИО": SPECIALIST_BUTTON,

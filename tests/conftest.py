@@ -32,7 +32,6 @@ support.block_network()
 
 import pytest  # noqa: E402
 
-import controller_access  # noqa: E402
 import feedback_log  # noqa: E402
 import info_list_quiz  # noqa: E402
 import local_answers  # noqa: E402
@@ -47,7 +46,6 @@ import users_log  # noqa: E402
 _STATE_CONTAINERS = (
     local_answers.faq_mode_users,
     local_answers.search_mode_users,
-    controller_access._controller_work_mode,
     nrs_search_links._await_nrs_query,
     specialist_reestr._await_specialist,
     national_reestr._await_national,
@@ -203,10 +201,3 @@ def _telegram_load_helpers_idle():
     finally:
         mod._outgoing_limiter.acquire = original
         mod.clear_national_query_cache()
-
-
-@pytest.fixture
-def max_controller(config_stub, monkeypatch):
-    """Включить тестового пользователя в контролёры MAX подменой конфига в памяти."""
-    monkeypatch.setattr(config_stub, "MAX_CONTROLLER_IDS", [support.TEST_UID])
-    return support.TEST_UID
