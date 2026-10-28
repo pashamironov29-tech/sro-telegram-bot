@@ -383,7 +383,7 @@ def test_max_button_opens_search_and_list(max_bot, monkeypatch):
     assert "Единый реестр" in max_bot.blob()
     assert national_reestr.is_national_mode(TEST_UID)
     labels = [text for _k, text, payload in keyboard_buttons(max_bot.m.main_keyboard(TEST_UID))]
-    assert national_reestr.NATIONAL_BUTTON in labels
+    assert "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ" in labels
     ctrl = [
         payload
         for _k, _t, payload in keyboard_buttons(max_bot.m.controller_keyboard(TEST_UID))
