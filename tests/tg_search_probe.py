@@ -180,6 +180,41 @@ def main(tmp_dir: str) -> None:
     run("short", tg.handle_universal_search, "123")
     run("multi", tg.handle_universal_search, support.INN_MULTI)
     run("present_absent", tg.present_found_organization, support.INN_ABSENT)
+
+    # Организация в двух СРО: карточка без выбора СРО, потом бланки с inline-выбором.
+    run("multi", tg.handle_universal_search, support.INN_MULTI)
+    sent.clear()
+    blanki_label = tg.BLANKI_MENU_ITEMS[0][1]
+    handled = tg.handle_blanki_menu_text(uid, blanki_label, tg.folder_path)
+    results["multi_blanks"] = {
+        "ret": handled,
+        "sent": list(sent),
+        "sro_id": sro_context.get_user_sro_id(uid),
+        "pending": sro_context.pending_sro_ids(uid),
+        "search_mode": local_answers.is_search_mode(uid),
+    }
+    sent.clear()
+    tg.bot.answer_callback_query = lambda *a, **k: None
+    tg.handle_ctxset_callbacks(
+        pytypes.SimpleNamespace(
+            id="cb1",
+            data="ctxset:MOTS",
+            message=pytypes.SimpleNamespace(chat=pytypes.SimpleNamespace(id=uid), message_id=5),
+        )
+    )
+    results["multi_ctxset"] = {
+        "ret": None,
+        "sent": list(sent),
+        "sro_id": sro_context.get_user_sro_id(uid),
+        "pending": sro_context.pending_sro_ids(uid),
+        "search_mode": False,
+    }
+
+    # Checko подключён: кнопка под карточкой и развилка для ИНН вне реестра.
+    tg.checko_configured = lambda: True
+    run("multi_checko", tg.handle_universal_search, support.INN_MULTI)
+    run("absent_checko", tg.handle_universal_search, support.INN_ABSENT)
+    tg.checko_configured = lambda: False
     run("looks_like_inn", lambda _uid: [
         tg.looks_like_inn(x) for x in ("7700000001", "770000000004", "12345678", "77000O0001")
     ])

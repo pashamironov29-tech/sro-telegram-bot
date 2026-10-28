@@ -437,6 +437,17 @@ def cached_pickable_sro_ids(chat_id: int) -> list[str] | None:
     return None
 
 
+def unresolved_sro_choices(chat_id: int) -> list[str] | None:
+    """СРО, из которых надо выбрать комплект бланков, — только если организация
+    в нескольких СРО и своё СРО ещё не выбрано. Спрашиваем при открытии бланков."""
+    if get_user_sro_id(chat_id):
+        return None
+    ids = _pickable_sro_cache.get(chat_id)
+    if ids and len(ids) >= 2:
+        return list(ids)
+    return None
+
+
 def is_back_to_sro_pick_button(text: str) -> bool:
     return (text or "").strip() in _BACK_TO_SRO_PICK_ALIASES
 
@@ -564,6 +575,7 @@ def apply_context_from_memberships(chat_id: int, inn: str, membership_ids: list[
     """
     Устанавливает контекст по членствам из реестра.
     Возвращает HTML-футер для карточки или пустую строку.
+    Для организации в нескольких СРО выбора нет: контекст без СРО, список СРО в кэше.
     """
     # Реальный ИНН — выходим из режима «без ИНН / направление»
     _await_joiner_activity.discard(chat_id)
@@ -583,15 +595,14 @@ def apply_context_from_memberships(chat_id: int, inn: str, membership_ids: list[
             _save_waits()
             return f"\n\n<i>Контекст СРО и бланки: {line}</i>"
 
-        _pending_sro_pick[chat_id] = list(membership_ids)
+        # Выбора СРО после поиска нет: в карточке уже видны все СРО организации.
+        # Комплект бланков спрашиваем только когда пользователь откроет бланки
+        # (список СРО для этого лежит в _pickable_sro_cache).
+        _pending_sro_pick.pop(chat_id, None)
         _user_context[chat_id] = {"sro_id": None, "inn": inn}
         _persist_context()
         _save_waits()
-        return (
-            "\n\n⚠️ <b>Организация состоит в нескольких СРО.</b>\n"
-            "Сначала выберите <b>своё СРО</b> кнопкой ниже — от этого зависят "
-            "бланки и план проверок."
-        )
+        return ""
 
     _pending_sro_pick.pop(chat_id, None)
     _pickable_sro_cache.pop(chat_id, None)

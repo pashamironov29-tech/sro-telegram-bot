@@ -1,6 +1,6 @@
 """Опрос для информационного листа: ответы пользователя → поля Word.
 
-Пилот: по умолчанию админы и контролёры. Всем — INFO_LIST_QUIZ_FOR_ALL = True.
+Доступен всем пользователям.
 Отправка готового .docx на почту — отдельным шагом, здесь только Word в чат.
 """
 
@@ -12,8 +12,6 @@ import session_persist
 
 # Пилот опроса. False = как раньше (сразу файл из реестра / пустой шаблон).
 INFO_LIST_QUIZ_ENABLED = True
-# False = только админы и контролёры (тест). True = всем, у кого есть ИНН.
-INFO_LIST_QUIZ_FOR_ALL = False
 
 ILQ_SKIP_BTN = "⏭ Пропустить"
 ILQ_CANCEL_BTN = "❌ Отмена опроса"
@@ -104,22 +102,8 @@ STEPS: tuple[tuple[str, str], ...] = (
 
 
 def can_use_info_list_quiz(chat_id: int) -> bool:
-    if not INFO_LIST_QUIZ_ENABLED:
-        return False
-    for_all = INFO_LIST_QUIZ_FOR_ALL
-    try:
-        from config_keys import INFO_LIST_QUIZ_FOR_ALL as _cfg_flag
-        for_all = bool(_cfg_flag)
-    except Exception:
-        pass
-    if for_all:
-        return True
-    try:
-        from users_log import is_bot_admin
-        from controller_access import is_controller
-    except Exception:
-        return False
-    return bool(is_bot_admin(chat_id) or is_controller(chat_id))
+    """Опрос инфолиста доступен всем (раньше — пилот для админов и контролёров)."""
+    return bool(INFO_LIST_QUIZ_ENABLED)
 
 
 def _save_persisted() -> None:

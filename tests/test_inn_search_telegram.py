@@ -76,15 +76,72 @@ def test_tg_short_query(tg_results):
     assert "Введите <b>ИНН</b> (9–12 цифр)" in _blob(tg_results[0]["short"])
 
 
+MAIN_LABELS = [
+    "🔎 Поиск организации в СРО / Checko",
+    "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)",
+    "👤 Где работает специалист (по ФИО)",
+    "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ",
+]
+OLD_TEXTS = (
+    "Другой ИНН / без ИНН",
+    "Назад в меню",
+    "Назад к выбору организации",
+    "Сменить СРО",
+    "Организация состоит в нескольких СРО",
+)
+
+
 def test_tg_inn_in_several_sro(tg_results):
+    """Организация в двух СРО: карточка со всеми СРО, без выбора СРО, клавиатура — 4 кнопки."""
     case = tg_results[0]["multi"]
     blob = _blob(case)
     assert "<b>ОГПС</b>" in blob
     assert "<b>МОТС</b>" in blob
-    assert "Организация состоит в нескольких СРО" in blob
-    assert case["pending"] == ["OGPS", "MOTS"]
+    for old in OLD_TEXTS:
+        assert old not in blob
+    assert not case["pending"]
+    assert case["sro_id"] is None
     labels = _markup(case)
-    assert sum(1 for label in labels if label.startswith("📄 СРО — ")) == 2
+    assert labels == MAIN_LABELS
+    assert not any(label.startswith("📄 СРО — ") for label in labels)
+    assert not any(old in label for label in labels for old in OLD_TEXTS)
+
+
+def test_tg_multi_sro_blanks_ask_inline_only_on_open(tg_results):
+    case = tg_results[0]["multi_blanks"]
+    assert case["ret"] is True
+    assert case["sro_id"] is None
+    assert "Бланки — какого СРО" in _blob(case)
+    markup = _markup(case)
+    assert any(m.startswith("ctxset:OGPS:info_list") for m in markup)
+    assert any(m.startswith("ctxset:MOTS:info_list") for m in markup)
+
+
+def test_tg_multi_sro_ctxset_callback_sets_sro(tg_results):
+    case = tg_results[0]["multi_ctxset"]
+    assert case["sro_id"] == "MOTS"
+    assert "Бланки:" in _blob(case)
+    assert not case["pending"]
+
+
+def test_tg_multi_sro_card_has_checko_button_when_configured(tg_results):
+    case = tg_results[0]["multi_checko"]
+    markup = _markup(case)
+    assert "📋 Проверить в Checko" in markup
+    assert any(m.startswith("chk:f:") for m in markup)
+    assert not case["pending"]
+    assert not any("Назад в меню" in m or "Другой ИНН" in m for m in markup)
+
+
+def test_tg_absent_inn_offers_checko_to_everyone(tg_results):
+    case = tg_results[0]["absent_checko"]
+    assert "в реестре 15 СРО не найден" in _blob(case)
+    assert any(m.startswith("chk:f:") for m in _markup(case))
+
+
+def test_tg_card_without_checko_has_no_checko_button(tg_results):
+    markup = _markup(tg_results[0]["multi"])
+    assert not any(m.startswith("chk:") for m in markup)
 
 
 def test_tg_present_absent_returns_none(tg_results):

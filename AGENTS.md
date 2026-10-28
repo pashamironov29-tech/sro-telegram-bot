@@ -21,8 +21,8 @@
 - Бланки: `blanki_sro.py`. Автозаполнение инфолиста и заявления на проверку: `info_list_fill.py` (заявление об изменениях и доверенность в коде выключены). Опрос инфолиста: `info_list_quiz.py`.
 - FAQ: `voprosy_faq.py`, `faq_menu_content.py`, `sro_site_qa.py`. Взносы: `sro_fees.py`.
 - Контакты СРО: `sro_contacts.py`. Справочник сотрудников: `contacts_search.py` (живой `contacts_data.py` не в git). Партнёры: `partners_data.py`. НРС: `nrs_search_links.py`.
-- Checko для контролёров: `checko_client.py`, допуск — `controller_access.py`, команда `/controller`.
-- Команды: `/start`, `/help`, `/search`, `/info`, `/controller`. В Telegram ещё админские `/users` и `/notify_update` (рассылка только с `confirm`). В MAX этих двух нет.
+- Checko для всех: `checko_client.py`, кнопка «📋 Проверить в Checko» под карточкой организации. Доступа по ролям нет; `controller_access.py` — только получатели `/notify_update`.
+- Команды: `/start`, `/help`, `/search`, `/info`. В Telegram ещё админские `/users` и `/notify_update` (рассылка только с `confirm`). В MAX этих двух нет.
 - Watchdog Telegram: `sro-telegram-watchdog.timer`, каждые 5 минут (`vps/telegram_watchdog.sh`).
 - Проверка сайтов СРО и страниц реестра (и НРС) в 08:00 МСК: `sro-site-health.timer` → `site_health_check.py`. Эти страницы — источник ночного синка; при сбое админам уходит сообщение.
 

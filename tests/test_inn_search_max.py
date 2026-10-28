@@ -14,10 +14,27 @@ from tests.support import (
     INN_MULTI,
     INN_SINGLE,
     TEST_UID,
+    keyboard_buttons,
     read_fixture,
 )
 
 UID = TEST_UID
+MAIN_PAYLOADS = ["menu:search", "menu:nrs", "menu:spec", "menu:nat"]
+OLD_KEYBOARD_TEXTS = (
+    "Другой ИНН / без ИНН",
+    "Назад в меню",
+    "Назад к выбору организации",
+    "Сменить СРО",
+    "Организация состоит в нескольких СРО",
+)
+
+
+def _keyboards(max_bot) -> list[list[str]]:
+    """Payload'ы callback-кнопок по каждой клавиатуре, отправленной пользователю."""
+    return [
+        [p for kind, _t, p in keyboard_buttons(att) if kind == "callback"]
+        for att in max_bot.attachments()
+    ]
 
 
 def _text(max_bot, value: str) -> None:
@@ -87,13 +104,14 @@ def test_start_unknown_inn_is_ordinary_search(max_bot):
 
 
 def test_inn_not_found_during_onboarding(max_bot):
-    """Обработчик ввода ИНН остаётся: при явном ожидании неизвестный ИНН ведёт на «Пропустить»."""
+    """Ожидание ИНН: неизвестный ИНН — просто 4 кнопки главного меню, без «Пропустить»."""
     sro_context.begin_await_inn(UID)
     _text(max_bot, INN_ABSENT)
 
     blob = max_bot.blob()
     assert "Организация не найдена в реестре" in blob
-    assert "menu:skip" in max_bot.callback_payloads()
+    assert "Пропустить" not in blob
+    assert _keyboards(max_bot) == [MAIN_PAYLOADS]
 
 
 @pytest.mark.parametrize(
@@ -130,27 +148,77 @@ def test_inn_callback_with_letters_rejected(max_bot):
 
 
 def test_inn_in_several_sro(max_bot):
+    """Организация в двух СРО: карточка со всеми СРО и только главное меню, без выбора СРО."""
     _text(max_bot, INN_MULTI)
 
     blob = max_bot.blob()
     assert "<b>ОГПС</b>" in blob
     assert "<b>МОТС</b>" in blob
-    assert "Организация состоит в нескольких СРО" in blob
-    payloads = max_bot.callback_payloads()
-    assert "sro:OGPS" in payloads
-    assert "sro:MOTS" in payloads
-    assert sro_context.pending_sro_ids(UID) == ["OGPS", "MOTS"]
+    for old in OLD_KEYBOARD_TEXTS:
+        assert old not in blob
+    assert _keyboards(max_bot)
+    assert all(kb == MAIN_PAYLOADS for kb in _keyboards(max_bot))
+    texts = [t for _k, t, _p in max_bot.buttons()]
+    assert not any(t.startswith("📄 СРО — ") for t in texts)
+    assert sro_context.pending_sro_ids(UID) is None
+    assert sro_context.get_user_sro_id(UID) is None
+    assert sro_context.get_user_context(UID)["inn"] == INN_MULTI
 
 
-def test_pick_sro_after_multi_card(max_bot):
+def test_multi_sro_faq_works_without_sro_choice(max_bot):
     _text(max_bot, INN_MULTI)
     max_bot.clear()
 
-    max_bot.m.handle_callback(UID, "sro:MOTS", {})
+    max_bot.m.handle_callback(UID, "menu:info", {})
+    max_bot.m.handle_callback(UID, "faq:root", {})
 
-    assert "Выбрано: <b>" in max_bot.blob()
+    blob = max_bot.blob()
+    assert "Бланки — какого СРО" not in blob
+    assert not any(p.startswith("sro:") for p in max_bot.callback_payloads())
+
+
+def test_multi_sro_blanks_ask_sro_only_when_opened(max_bot):
+    _text(max_bot, INN_MULTI)
+    max_bot.clear()
+
+    max_bot.m.handle_callback(UID, "info:docs", {})
+
+    payloads = max_bot.callback_payloads()
+    assert "sro:OGPS" in payloads
+    assert "sro:MOTS" in payloads
+    assert "Бланки — какого СРО" in max_bot.blob()
+
+
+def test_multi_sro_blank_click_asks_then_sends(max_bot):
+    _text(max_bot, INN_MULTI)
+    max_bot.clear()
+
+    max_bot.m.handle_callback(UID, "blank:info_list", {})
+    assert "sro:MOTS:info_list" in max_bot.callback_payloads()
+    assert sro_context.get_user_sro_id(UID) is None
+
+    max_bot.clear()
+    max_bot.m.handle_callback(UID, "sro:MOTS:info_list", {})
     assert sro_context.get_user_sro_id(UID) == "MOTS"
     assert sro_context.get_user_context(UID)["inn"] == INN_MULTI
+
+
+def test_multi_sro_card_has_checko_button_for_everyone(max_bot, config_stub, monkeypatch):
+    monkeypatch.setattr(config_stub, "CHECKO_API_KEY", "test-fake-checko-key")
+    _text(max_bot, INN_MULTI)
+
+    card_kb = _keyboards(max_bot)[0]
+    assert card_kb == [f"chk:f:{INN_MULTI}"] + MAIN_PAYLOADS
+    assert "📋 Проверить в Checko" in [t for _k, t, _p in max_bot.buttons()]
+    assert "<b>МОТС</b>" in max_bot.blob()
+
+
+def test_card_without_checko_key_has_no_checko_button(max_bot, config_stub, monkeypatch):
+    monkeypatch.setattr(config_stub, "CHECKO_API_KEY", "")
+    _text(max_bot, INN_SINGLE)
+
+    assert all(kb == MAIN_PAYLOADS for kb in _keyboards(max_bot))
+    assert not any(p.startswith("chk:") for p in max_bot.callback_payloads())
 
 
 def test_name_search_single_hit_opens_card(max_bot):
@@ -198,25 +266,20 @@ def test_card_keeps_cache_when_site_returns_stub(max_bot, monkeypatch):
     assert saved["reg_number"] == "OGPS-001"
 
 
-def test_controller_gets_checko_fork(max_bot, max_controller, config_stub, monkeypatch):
+def test_found_org_card_has_checko_button_for_member(max_bot, config_stub, monkeypatch):
+    """Checko — для всех: кнопка под карточкой, без /controller."""
     monkeypatch.setattr(config_stub, "CHECKO_API_KEY", "test-fake-checko-key")
-    max_bot.m.handle_text(max_controller, "/controller", {})
-    max_bot.clear()
 
-    max_bot.m.handle_text(max_controller, INN_SINGLE, {})
+    _text(max_bot, INN_SINGLE)
 
-    assert "Организация найдена" in max_bot.blob()
-    payloads = max_bot.callback_payloads()
-    assert f"chk:r:{INN_SINGLE}" in payloads
-    assert f"chk:f:{INN_SINGLE}" in payloads
+    assert "ООО «Тестстрой»" in max_bot.blob()
+    assert f"chk:f:{INN_SINGLE}" in max_bot.callback_payloads()
 
 
-def test_controller_absent_inn_offers_checko(max_bot, max_controller, config_stub, monkeypatch):
+def test_absent_inn_offers_checko_to_member(max_bot, config_stub, monkeypatch):
     monkeypatch.setattr(config_stub, "CHECKO_API_KEY", "test-fake-checko-key")
-    max_bot.m.handle_text(max_controller, "/controller", {})
-    max_bot.clear()
 
-    max_bot.m.handle_text(max_controller, INN_ABSENT, {})
+    _text(max_bot, INN_ABSENT)
 
     assert "в реестре 15 СРО не найден" in max_bot.blob()
     payloads = max_bot.callback_payloads()

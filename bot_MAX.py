@@ -59,14 +59,8 @@ from checko_client import (
     format_section as format_checko_section,
     site_url as checko_site_url,
 )
-from controller_access import (
-    can_use_checko,
-    is_controller,
-    is_controller_work_mode,
-)
 from bot_core import (
     active_input_mode,
-    prepare_controller_menu,
     prepare_faq,
     prepare_main_menu,
     prepare_national,
@@ -76,6 +70,7 @@ from bot_core import (
     prepare_welcome_reset,
 )
 from menu_labels import (
+    CHECKO_CARD_BUTTON,
     NATIONAL_BUTTON,
     NRS_LINK_BUTTON,
     SEARCH_ORG_BUTTON,
@@ -153,7 +148,8 @@ from sro_context import (
     joiner_sro_pick_hint,
     mark_open_main_after_sro,
     membership_ids_for_sro_pick,
-    pending_sro_ids,
+    unresolved_sro_choices,
+    cached_pickable_sro_ids,
     set_user_sro,
 )
 from sro_fees import format_fees_message
@@ -193,7 +189,6 @@ HELP_TEXT = f"""ℹ️ <b>Справка — Помощник СРО</b>
 /search — поиск организации
 /fio — поиск специалиста по ФИО
 /info — FAQ и бланки
-/controller — меню контролёра (только сотрудникам СРО)
 
 В MAX кнопки — <b>под сообщениями</b>, не внизу экрана как в Telegram.
 
@@ -234,38 +229,27 @@ def row(*buttons: dict) -> list[dict]:
     return list(buttons)
 
 
-def main_keyboard(user_id: int) -> list[dict]:
-    if is_controller_work_mode(user_id):
-        return controller_keyboard(user_id)
-    return kb(
+def main_rows() -> list[list[dict]]:
+    return [
         row(callback_button(SEARCH_ORG, "menu:search")),
         row(callback_button(NRS_LINK_BUTTON, "menu:nrs")),
         row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
         row(callback_button(NATIONAL_BUTTON, "menu:nat")),
-    )
+    ]
 
 
-def controller_keyboard(user_id: int | None = None) -> list[dict]:
-    return kb(
-        row(callback_button(SEARCH_ORG, "menu:search")),
-        row(callback_button(NRS_LINK_BUTTON, "menu:nrs")),
-        row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
-        row(callback_button(NATIONAL_BUTTON, "menu:nat")),
-    )
+def main_keyboard(user_id: int | None = None) -> list[dict]:
+    """Главное меню — 4 кнопки, одинаково для всех пользователей."""
+    return kb(*main_rows())
 
 
-def controller_menu_text() -> str:
-    return (
-        "👋 <b>Меню контролёра СРО</b>\n\n"
-        f"<b>{SEARCH_ORG}</b> — ИНН или название по всем 15 СРО\n"
-        "   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
-        f"<b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ\n"
-        f"<b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
-        f"<b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО (НОСТРОЙ и НОПРИЗ)\n"
-        "❓ Бланки и документы для проверки — команда /info\n\n"
-        "<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
-        f"{OFFICIAL_SOURCE_DISCLAIMER}"
-    )
+def card_keyboard(inn: str) -> list[dict]:
+    """Под карточкой организации: кнопка Checko (если подключён) + 4 кнопки меню."""
+    rows = []
+    if checko_configured() and (inn or "").isdigit():
+        rows.append(row(callback_button(CHECKO_CARD_BUTTON, f"chk:f:{inn}")))
+    rows.extend(main_rows())
+    return kb(*rows)
 
 
 def checko_fork_keyboard(inn: str, *, in_reestr: bool) -> list[dict]:
@@ -298,20 +282,12 @@ def checko_sections_keyboard(inn: str) -> list[dict]:
 
 
 def menu_keyboard_for_user(user_id: int) -> list[dict]:
-    if is_awaiting_inn(user_id) and not get_user_sro_id(user_id) and not get_user_context(user_id):
-        return onboarding_keyboard(user_id)
     return main_keyboard(user_id)
 
+
 def onboarding_keyboard(user_id: int | None = None) -> list[dict]:
-    rows = [
-        row(callback_button(SEARCH_ORG, "menu:search")),
-        row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
-        row(callback_button(SKIP_ONBOARDING_BUTTON, "menu:skip")),
-    ]
-    if user_id is not None and is_controller(user_id):
-        rows.append(row(callback_button("👋 Меню контролёра", "menu:controller")))
-    rows.append(row(callback_button("ℹ️ Справка", "menu:help")))
-    return kb(*rows)
+    """Отдельного онбординга больше нет — всегда главное меню."""
+    return main_keyboard(user_id)
 
 
 def back_main_row() -> list[dict]:
@@ -411,19 +387,25 @@ def blanki_keyboard(user_id: int) -> list[dict]:
     return kb(*rows)
 
 
-def activity_keyboard() -> list[dict]:
-    rows = [row(callback_button(label, f"act:{code}")) for label, code in JOINER_ACTIVITY_CHOICES]
-    rows.append(row(callback_button(RESTART_ORG_BUTTON, "menu:restart")))
-    return kb(*rows)
-
-
-def sro_pick_keyboard(sro_ids: list[str], *, back_to_direction: bool = False) -> list[dict]:
-    rows = [row(callback_button(context_button_label(sid), f"sro:{sid}")) for sid in sro_ids]
-    if back_to_direction:
-        rows.append(row(callback_button("⬅️ Назад к направлению", "menu:skip")))
-    rows.append(row(callback_button(RESTART_ORG_BUTTON, "menu:restart")))
+def blanki_sro_choice_keyboard(sro_ids: list[str], key: str | None = None) -> list[dict]:
+    """Выбор СРО для бланков (только при открытии бланков)."""
+    rows = []
+    for sid in sro_ids:
+        if get_sro_profile(sid):
+            payload = f"sro:{sid}" + (f":{key}" if key else "")
+            rows.append(row(callback_button(context_button_label(sid), payload)))
     rows.append(back_main_row())
     return kb(*rows)
+
+
+def send_blanki_sro_choice(user_id: int, sro_ids: list[str], key: str | None = None) -> None:
+    send(
+        user_id,
+        "📄 <b>Бланки — какого СРО?</b>\n\n"
+        "Организация состоит в нескольких СРО. Выберите комплект бланков "
+        "(строителей и проектировщиков не смешиваем):",
+        blanki_sro_choice_keyboard(sro_ids, key),
+    )
 
 
 def name_results_keyboard(results: list[tuple[str, str]]) -> list[dict]:
@@ -704,8 +686,8 @@ def send_company_card(user_id: int, inn: str) -> bool:
     membership_ids = membership_ids_for_sro_pick(memberships)
     response_text += apply_context_from_memberships(user_id, inn, membership_ids)
 
-    pick_ids = pending_sro_ids(user_id)
-    atts = sro_pick_keyboard(pick_ids) if pick_ids and len(pick_ids) >= 2 else main_keyboard(user_id)
+    # Выбора СРО после поиска нет: в карточке видны все СРО организации.
+    atts = card_keyboard(inn)
     if loading_id and api is not None:
         try:
             api.edit_message(str(loading_id), text=response_text, attachments=atts)
@@ -713,15 +695,18 @@ def send_company_card(user_id: int, inn: str) -> bool:
             send(user_id, response_text, atts)
     else:
         send(user_id, response_text, atts)
-    if pick_ids and len(pick_ids) >= 2:
-        hint = context_picker_hint(user_id)
-        if hint:
-            send(user_id, hint)
     return True
 
 
 def context_ready_text(user_id: int) -> str:
     prof = get_user_profile(user_id)
+    ctx = get_user_context(user_id) or {}
+    if not prof and ctx.get("inn") and unresolved_sro_choices(user_id):
+        return (
+            "✅ Организация найдена — она состоит в нескольких СРО (см. карточку).\n\n"
+            "📋 Бланки: /info → «📋 Проверяемые документы» — "
+            "СРО спрошу при открытии бланков."
+        )
     if not prof:
         return (
             "✅ Можно пользоваться меню.\n\n"
@@ -761,12 +746,6 @@ def send_welcome(user_id: int, update: dict) -> None:
     send(user_id, welcome_text(), main_keyboard(user_id))
 
 
-def open_controller_menu(user_id: int) -> None:
-    prepare_controller_menu(user_id)
-    clear_await_inn(user_id)
-    send(user_id, controller_menu_text(), controller_keyboard(user_id))
-
-
 def open_nrs(user_id: int) -> None:
     prepare_nrs(user_id)
     send(user_id, format_nrs_link_intro(), kb(back_main_row()))
@@ -800,41 +779,34 @@ def nrs_result_keyboard(query: str) -> list[dict]:
 
 
 def present_found_organization(user_id: int, inn: str) -> str | None:
-    """card / fork / None — как в Telegram для контролёра."""
+    """card / fork / failed / None — для всех пользователей.
+
+    В реестре СРО — карточка (под ней кнопка Checko).
+    Нет в реестре, но Checko подключён — предлагаем «полную информацию».
+    """
     clean = normalize_inn(inn) if looks_like_inn(inn) else str(inn).strip()
     in_reestr = org_in_local_reestr(clean)
-    if can_use_checko(user_id) and checko_configured() and not is_awaiting_inn(user_id):
-        enter_search_mode(user_id)
-        if in_reestr:
-            send(
-                user_id,
-                f"✅ Организация найдена (ИНН <code>{clean}</code>)\n\n"
-                "<b>Где смотреть?</b>\n"
-                "<i>Можно сразу ввести другой ИНН — поиск ещё открыт.</i>",
-                checko_fork_keyboard(clean, in_reestr=True),
-            )
-            return "fork"
-        send(
-            user_id,
-            f"ИНН <code>{clean}</code> в реестре 15 СРО не найден.\n"
-            "Можно открыть <b>полную информацию</b> (Checko).",
-            checko_fork_keyboard(clean, in_reestr=False),
-        )
-        return "fork"
     if in_reestr and send_company_card(user_id, clean):
         return "card"
     if in_reestr:
         # Карточка в реестре есть, но собрать её не вышло — сообщение уже ушло.
         return "failed"
+    if checko_configured() and looks_like_inn(clean):
+        enter_search_mode(user_id)
+        send(
+            user_id,
+            f"ИНН <code>{clean}</code> в реестре 15 СРО не найден.\n"
+            "Можно открыть <b>полную информацию</b> (Checko).\n"
+            "<i>Или введите другой ИНН / название — поиск ещё открыт.</i>",
+            checko_fork_keyboard(clean, in_reestr=False),
+        )
+        return "fork"
     return None
 
 
 def open_main(user_id: int, text: str | None = None) -> None:
     prepare_main_menu(user_id)
     clear_nav_mode_flags(user_id)
-    if is_controller_work_mode(user_id):
-        open_controller_menu(user_id)
-        return
     send(user_id, text or "📋 <b>Главное меню</b> — выберите раздел:", main_keyboard(user_id))
 
 
@@ -943,6 +915,11 @@ def send_faq_topic(user_id: int, topic: str) -> None:
 
 
 def send_blanki(user_id: int, key: str) -> None:
+    pick_ids = unresolved_sro_choices(user_id)
+    if pick_ids:
+        # Организация в нескольких СРО: спрашиваем только сейчас, при открытии бланка.
+        send_blanki_sro_choice(user_id, pick_ids, key)
+        return
     sro_id = resolve_blanki_sro_id(get_user_sro_id(user_id))
     path = blanki_file_path(folder_path, sro_id, key)
     caption = next((c for k, _l, c in BLANKI_MENU_ITEMS if k == key), "Бланк")
@@ -968,9 +945,6 @@ def send_blanki(user_id: int, key: str) -> None:
 
 
 def handle_checko(user_id: int, payload: str) -> None:
-    if not can_use_checko(user_id):
-        send(user_id, "Checko доступен в /controller.", main_keyboard(user_id))
-        return
     parts = payload.split(":")
     if len(parts) < 3:
         send(user_id, "Устаревшая кнопка Checko.", main_keyboard(user_id))
@@ -979,7 +953,7 @@ def handle_checko(user_id: int, payload: str) -> None:
     if kind == "r" and len(parts) >= 3:
         inn = parts[2]
         if not (inn or "").isdigit():
-            send(user_id, "Некорректный ИНН.", controller_keyboard(user_id))
+            send(user_id, "Некорректный ИНН.", main_keyboard(user_id))
             return
         if not org_in_local_reestr(inn):
             send(user_id, "❌ В реестре 15 СРО этой организации нет.")
@@ -990,7 +964,7 @@ def handle_checko(user_id: int, payload: str) -> None:
     if kind == "f" and len(parts) >= 3:
         inn = parts[2]
         if not (inn or "").isdigit():
-            send(user_id, "Некорректный ИНН.", controller_keyboard(user_id))
+            send(user_id, "Некорректный ИНН.", main_keyboard(user_id))
             return
         try:
             text = format_checko_section("general", inn)
@@ -1005,7 +979,7 @@ def handle_checko(user_id: int, payload: str) -> None:
     if kind == "s" and len(parts) >= 4:
         section, inn = parts[2], parts[3]
         if not (inn or "").isdigit():
-            send(user_id, "Некорректный ИНН.", controller_keyboard(user_id))
+            send(user_id, "Некорректный ИНН.", main_keyboard(user_id))
             return
         try:
             text = format_checko_section(section, inn)
@@ -1013,7 +987,7 @@ def handle_checko(user_id: int, payload: str) -> None:
             text = f"⚠️ Не удалось загрузить раздел: {html_esc(str(exc)[:200])}"
         send(user_id, text, checko_sections_keyboard(inn))
         return
-    send(user_id, "Неизвестная команда Checko.", controller_keyboard(user_id))
+    send(user_id, "Неизвестная команда Checko.", main_keyboard(user_id))
 
 
 def handle_callback(user_id: int, payload: str, update: dict) -> None:
@@ -1030,17 +1004,6 @@ def handle_callback(user_id: int, payload: str, update: dict) -> None:
         return
     if payload == "menu:help":
         send(user_id, HELP_TEXT, main_keyboard(user_id))
-        return
-    if payload == "menu:controller":
-        if not is_controller(user_id):
-            send(
-                user_id,
-                "⛔ Команда <code>/controller</code> — только для сотрудников контроля СРО.\n\n"
-                "Обычное меню: /start",
-                main_keyboard(user_id),
-            )
-            return
-        open_controller_menu(user_id)
         return
     if payload == "menu:nrs":
         open_nrs(user_id)
@@ -1064,21 +1027,14 @@ def handle_callback(user_id: int, payload: str, update: dict) -> None:
         clear_user_sro(user_id)
         send_welcome(user_id, update)
         return
-    if payload == "menu:skip":
-        begin_joiner_activity_pick(user_id)
-        send(user_id, joiner_activity_hint(), activity_keyboard())
-        return
-    if payload.startswith("act:"):
-        activity = payload.split(":", 1)[1]
-        sro_ids = begin_joiner_sro_pick(user_id, activity)
-        send(
-            user_id,
-            joiner_sro_pick_hint(activity),
-            sro_pick_keyboard(sro_ids, back_to_direction=True),
-        )
+    if payload in ("menu:skip", "menu:controller") or payload.startswith("act:"):
+        # Старые кнопки (направление, «Пропустить», контролёр) — просто главное меню.
+        open_main(user_id)
         return
     if payload.startswith("sro:"):
-        sid = (payload.split(":", 1)[1] or "").strip().upper()
+        _parts = payload.split(":")
+        sid = (_parts[1] if len(_parts) > 1 else "").strip().upper()
+        blank_key = _parts[2] if len(_parts) > 2 else ""
         prof = get_sro_profile(sid)
         if not prof:
             send(user_id, "Неизвестное СРО. Выберите кнопку из меню.", main_keyboard(user_id))
@@ -1089,6 +1045,9 @@ def handle_callback(user_id: int, payload: str, update: dict) -> None:
         clear_await_inn(user_id)
         clear_joiner_activity_await(user_id)
         consume_open_main_after_sro(user_id)
+        if blank_key:
+            send_blanki(user_id, blank_key)
+            return
         act = ACTIVITY_LABEL.get(prof["activity"], "")
         title = html_esc(prof["short_title"])
         send(
@@ -1121,6 +1080,9 @@ def handle_callback(user_id: int, payload: str, update: dict) -> None:
             f"📄 <b>Бланки</b> ({blanki_source_label(get_user_sro_id(user_id))}). Выберите файл:",
             blanki_keyboard(user_id),
         )
+        _choices = cached_pickable_sro_ids(user_id)
+        if _choices:
+            send_blanki_sro_choice(user_id, _choices)
         return
     if payload == "faq:root":
         prepare_faq(user_id)
@@ -1175,15 +1137,8 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
         send(user_id, "📁 <b>Полезная информация</b>", info_keyboard())
         return
     if low in ("/controller", "controller", "контролер", "контролёр"):
-        if not is_controller(user_id):
-            send(
-                user_id,
-                "⛔ Команда <code>/controller</code> — только для сотрудников контроля СРО.\n\n"
-                "Обычное меню: /start",
-                main_keyboard(user_id),
-            )
-            return
-        open_controller_menu(user_id)
+        # Кабинета контролёра больше нет — главное меню.
+        open_main(user_id)
         return
     if low in ("/menu", "меню", "menu") or user_text == BACK_MENU:
         open_main(user_id)
@@ -1231,8 +1186,8 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
         return
 
     if is_awaiting_joiner_activity(user_id):
-        send(user_id, "📌 Выберите направление кнопкой ниже.", activity_keyboard())
-        return
+        # Выбор направления убран; сбрасываем «зависшее» ожидание после обновления.
+        clear_joiner_activity_await(user_id)
 
     if looks_like_inn(user_text):
         # ИНН — поиск, если ждём ИНН / не в FAQ.
@@ -1248,16 +1203,15 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
             if outcome == "card":
                 clear_await_inn(user_id)
                 exit_search_mode(user_id)
-                if not pending_sro_ids(user_id):
-                    consume_open_main_after_sro(user_id)
-                    send(user_id, context_ready_text(user_id), main_keyboard(user_id))
+                consume_open_main_after_sro(user_id)
+                send(user_id, context_ready_text(user_id), main_keyboard(user_id))
                 return
             if is_awaiting_inn(user_id):
                 send(
                     user_id,
                     "❌ Организация не найдена в реестре.\n\n"
                     "• Проверьте ИНН\n"
-                    f"• Если только вступаете — нажмите «{SKIP_ONBOARDING_BUTTON}».",
+                    "• Если вы только вступаете — меню и бланки доступны и без ИНН.",
                     onboarding_keyboard(user_id),
                 )
                 return
@@ -1309,7 +1263,6 @@ def setup_commands() -> None:
                 {"name": "search", "description": "Поиск организации по ИНН или названию"},
                 {"name": "fio", "description": "Поиск специалиста по ФИО"},
                 {"name": "info", "description": "FAQ, бланки и проверяемые документы"},
-                {"name": "controller", "description": "Меню контролёра СРО (сотрудникам)"},
             ]
         )
     except Exception as exc:

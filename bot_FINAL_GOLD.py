@@ -37,6 +37,7 @@ from sro_context import (
     begin_joiner_activity_pick,
     begin_joiner_sro_pick,
     cached_pickable_sro_ids,
+    unresolved_sro_choices,
     can_repick_org_context,
     CHANGE_CONTEXT_BUTTON,
     is_back_to_sro_pick_button,
@@ -113,17 +114,9 @@ from reestr_sync import (
     plany_key_from_filename, sro_display_name, get_org_memberships,
     membership_needs_detail_fetch, ensure_plan_month_year,
 )
-from controller_access import (
-    can_use_checko,
-    controller_chat_ids,
-    enter_controller_work_mode,
-    exit_controller_work_mode,
-    is_controller,
-    is_controller_work_mode,
-)
+from controller_access import controller_chat_ids  # получатели /notify_update
 from bot_core import (
     active_input_mode,
-    prepare_controller_menu,
     prepare_faq,
     prepare_main_menu,
     prepare_national,
@@ -169,7 +162,8 @@ from specialist_reestr import (
     is_specialist_mode,
 )
 # Главное меню: 4 крупные кнопки. Подписи и алиасы старых — в menu_labels.py.
-from menu_labels import (  # noqa: E402
+from menu_labels import (
+    CHECKO_CARD_BUTTON,  # noqa: E402
     LEGACY_MENU_ALIASES as _LEGACY_MENU_ALIASES,
     NATIONAL_BUTTON,
     NRS_LINK_BUTTON,
@@ -1390,43 +1384,33 @@ def get_checko_after_section_keyboard(inn: str) -> types.InlineKeyboardMarkup:
     return kb
 
 
+def get_checko_card_keyboard(inn: str) -> types.InlineKeyboardMarkup:
+    """Кнопка под карточкой организации — для всех пользователей."""
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton(CHECKO_CARD_BUTTON, callback_data=f"chk:f:{inn}"))
+    return kb
+
+
 def present_found_organization(chat_id: int, inn: str, reply_markup=None) -> str | None:
     """
-    Контролёр (не онбординг ИНН): развилка реестр СРО / Checko.
-    Остальные и онбординг — сразу send_company_card.
+    Поиск по ИНН для всех пользователей.
+    Есть в реестре СРО — сразу карточка (под ней кнопка Checko).
+    Нет в реестре, но Checko подключён — предлагаем «полную информацию».
 
     Returns:
-        "fork" — показана развилка Checko (режим поиска не сбрасывать),
+        "fork" — Checko-развилка для ИНН вне реестра (режим поиска не сбрасывать),
         "card" — отдана карточка реестра,
-        None — организация не найдена в локальном реестре (и не Checko-fork).
+        None — организация не найдена.
     """
     clean = normalize_inn(inn) if looks_like_inn(inn) else str(inn).strip()
     in_reestr = org_in_local_reestr(clean)
-    if (
-        can_use_checko(chat_id)
-        and not is_awaiting_inn(chat_id)
-        and checko_configured()
-    ):
+    if in_reestr:
+        if send_company_card(chat_id, clean, reply_markup=reply_markup):
+            return "card"
+        return None
+    if checko_configured() and looks_like_inn(clean):
         # Пока висит развилка — универсальный поиск остаётся активным.
         enter_search_mode(chat_id)
-        if in_reestr:
-            import html as html_lib
-
-            name = org_display_name(clean)
-            found = (
-                f"✅ Найдена: <b>{html_lib.escape(name)}</b>\nИНН <code>{clean}</code>"
-                if name
-                else f"✅ Организация найдена (ИНН <code>{clean}</code>)"
-            )
-            safe_send_message(
-                chat_id,
-                f"{found}\n\n"
-                "<b>Где смотреть?</b>\n"
-                "<i>Можно сразу ввести другой ИНН или название — поиск ещё открыт.</i>",
-                parse_mode="HTML",
-                reply_markup=get_checko_fork_keyboard(clean, in_reestr=True),
-            )
-            return "fork"
         safe_send_message(
             chat_id,
             f"ИНН <code>{clean}</code> в реестре 15 СРО не найден.\n"
@@ -1436,10 +1420,6 @@ def present_found_organization(chat_id: int, inn: str, reply_markup=None) -> str
             reply_markup=get_checko_fork_keyboard(clean, in_reestr=False),
         )
         return "fork"
-    if in_reestr:
-        if send_company_card(chat_id, clean, reply_markup=reply_markup):
-            return "card"
-        return None
     return None
 
 
@@ -1503,17 +1483,13 @@ def send_company_card(chat_id: int, inn: str, reply_markup=None) -> bool:
     membership_ids = membership_ids_for_sro_pick(memberships)
     response_text += apply_context_from_memberships(chat_id, inn, membership_ids)
 
-    pick_ids = pending_sro_ids(chat_id)
+    # Выбора СРО нет. Под карточкой — кнопка Checko (если подключён);
+    # reply-клавиатура (4 кнопки меню) при этом остаётся на экране.
     card_markup = reply_markup
-    if pick_ids and len(pick_ids) >= 2:
-        card_markup = get_sro_context_picker_keyboard(pick_ids)
+    if checko_configured() and looks_like_inn(inn):
+        card_markup = get_checko_card_keyboard(inn)
 
     _deliver_company_card(chat_id, response_text, card_markup, loading_msg)
-
-    if pick_ids and len(pick_ids) >= 2:
-        hint = context_picker_hint(chat_id)
-        if hint:
-            bot.send_message(chat_id, hint, parse_mode="HTML")
     return True
 
 
@@ -1647,9 +1623,7 @@ def send_blanki_file(chat_id: int, path_file: str, caption: str, error_text: str
 def _download_docs_intro(chat_id: int) -> str:
     label = blanki_source_label(get_user_sro_id(chat_id))
     if cached_pickable_sro_ids(chat_id):
-        other = (
-            f" Другое СРО этой организации — «{CHANGE_CONTEXT_BUTTON}» → другое СРО."
-        )
+        other = " Другое СРО этой организации — кнопки под этим сообщением."
     else:
         other = " Чтобы подставить формы другого СРО — найдите организацию по ИНН."
     return (
@@ -1844,6 +1818,30 @@ def _handle_info_list_quiz_text(chat_id: int, user_text: str) -> None:
     )
 
 
+def get_blanki_sro_choice_inline(
+    sro_ids: list[str], key: str | None = None
+) -> types.InlineKeyboardMarkup:
+    markup = types.InlineKeyboardMarkup()
+    for sro_id in sro_ids:
+        if get_sro_profile(sro_id):
+            data = f"ctxset:{sro_id}" + (f":{key}" if key else "")
+            markup.add(
+                types.InlineKeyboardButton(context_button_label(sro_id), callback_data=data)
+            )
+    return markup
+
+
+def send_blanki_sro_choice(chat_id: int, sro_ids: list[str], key: str | None = None) -> None:
+    safe_send_message(
+        chat_id,
+        "📄 <b>Бланки — какого СРО?</b>\n\n"
+        "Организация состоит в нескольких СРО. Выберите комплект бланков "
+        "(строителей и проектировщиков не смешиваем):",
+        parse_mode="HTML",
+        reply_markup=get_blanki_sro_choice_inline(sro_ids, key),
+    )
+
+
 def handle_blanki_menu_text(chat_id: int, user_text: str, sro_files_root: str) -> bool:
     """Кнопки скачивания бланков — не поиск организации (важно в режиме /search)."""
     # Сначала узнаём, нажали ли именно кнопку бланка. Иначе при незавершённом
@@ -1862,14 +1860,11 @@ def handle_blanki_menu_text(chat_id: int, user_text: str, sro_files_root: str) -
     if not matched_item:
         return False
 
-    pick_ids = pending_sro_ids(chat_id)
-    if pick_ids and len(pick_ids) >= 2:
-        bot.send_message(
-            chat_id,
-            multi_sro_picker_hint(pick_ids),
-            parse_mode="HTML",
-            reply_markup=get_sro_context_picker_keyboard(pick_ids),
-        )
+    pick_ids = unresolved_sro_choices(chat_id)
+    if pick_ids:
+        # Организация в нескольких СРО: спрашиваем только сейчас, при скачивании бланка.
+        # Inline-кнопки — reply-клавиатура не меняется.
+        send_blanki_sro_choice(chat_id, pick_ids, matched_item[0])
         return True
 
     key, _button_label, caption = matched_item
@@ -2024,25 +2019,7 @@ def handle_blanki_menu_text(chat_id: int, user_text: str, sro_files_root: str) -
     return True
 
 
-def get_sro_context_picker_keyboard(
-    sro_ids: list[str],
-    *,
-    show_back_to_direction: bool = False,
-):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    for sro_id in sro_ids:
-        if get_sro_profile(sro_id):
-            markup.add(types.KeyboardButton(context_button_label(sro_id)))
-    if show_back_to_direction:
-        markup.add(types.KeyboardButton(BACK_TO_DIRECTION_BUTTON))
-    markup.add(types.KeyboardButton(RESTART_ORG_BUTTON))
-    markup.add(types.KeyboardButton("⬅️ Назад в меню"))
-    return markup
-
-
 def _menu_markup(chat_id: int):
-    if is_controller_work_mode(chat_id):
-        return get_controller_keyboard(chat_id)
     return get_main_keyboard(chat_id)
 
 
@@ -2316,7 +2293,6 @@ def setup_bot_commands():
                 types.BotCommand("search", "Поиск организации по ИНН"),
                 types.BotCommand("fio", "Поиск специалиста по ФИО"),
                 types.BotCommand("info", "FAQ и бланки документов"),
-                types.BotCommand("controller", "Меню контролёра СРО"),
                 types.BotCommand("users", "Список пользователей бота"),
                 types.BotCommand(
                     "notify_update",
@@ -2342,10 +2318,11 @@ _NAV_ALIASES = {
     "/help": "help",
     "info": "info",
     "/info": "info",
-    "controller": "controller",
-    "контролер": "controller",
-    "контролёр": "controller",
-    "/controller": "controller",
+    # Кабинет контролёра убран; старая команда просто открывает главное меню.
+    "controller": "menu",
+    "контролер": "menu",
+    "контролёр": "menu",
+    "/controller": "menu",
 }
 
 
@@ -2358,16 +2335,6 @@ def resolve_navigation_command(text: str) -> str | None:
 
 BACK_TO_MENU_BUTTON = "⬅️ Назад в меню"
 
-
-
-def get_controller_keyboard(chat_id: int | None = None):
-    """Меню контролёров: поиск и НРС — первыми, без кнопок вступающих."""
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(types.KeyboardButton(SEARCH_ORG_BUTTON))
-    keyboard.add(types.KeyboardButton(NRS_LINK_BUTTON))
-    keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
-    keyboard.add(types.KeyboardButton(NATIONAL_BUTTON))
-    return keyboard
 
 
 def get_main_keyboard(chat_id: int | None = None):
@@ -2397,13 +2364,6 @@ def get_change_context_inline(chat_id: int) -> types.InlineKeyboardMarkup:
                 callback_data="ctxnav:repick",
             )
         )
-    if is_joiner_flow(chat_id):
-        markup.add(
-            types.InlineKeyboardButton(
-                "⬅️ Назад к направлению",
-                callback_data="ctxnav:direction",
-            )
-        )
     markup.add(
         types.InlineKeyboardButton(
             RESTART_ORG_BUTTON,
@@ -2423,84 +2383,39 @@ def offer_change_context_menu(chat_id: int) -> None:
 
 
 def do_back_to_sro_pick(chat_id: int) -> None:
+    """«Другое СРО этой организации» — inline-выбор комплекта бланков."""
     pick_ids = cached_pickable_sro_ids(chat_id)
-    if not pick_ids and is_joiner_flow(chat_id):
-        act = get_joiner_activity(chat_id)
-        if act:
-            pick_ids = begin_joiner_sro_pick(chat_id, act)
     if pick_ids:
-        mark_open_main_after_sro(chat_id)
-        restore_pending_sro_pick(chat_id, pick_ids)
-        act = get_joiner_activity(chat_id)
-        joiner = bool(act) or is_joiner_flow(chat_id)
-        hint = joiner_sro_pick_hint(act) if joiner else multi_sro_picker_hint(pick_ids)
-        finish_button_reply(
-            chat_id,
-            hint,
-            reply_markup=get_sro_context_picker_keyboard(
-                pick_ids,
-                show_back_to_direction=joiner,
-            ),
-        )
+        send_blanki_sro_choice(chat_id, pick_ids)
     else:
         finish_button_reply(
             chat_id,
-            "Сейчас нет списка организаций для выбора.\n"
-            "Введите ИНН или нажмите «Пропустить» на /start.",
+            "Сейчас нет списка СРО для выбора.\n"
+            "Найдите организацию по ИНН — «" + SEARCH_ORG_BUTTON + "».",
             reply_markup=get_main_keyboard(chat_id),
         )
 
 
 def do_back_to_direction(chat_id: int) -> None:
-    begin_joiner_activity_pick(chat_id)
+    """Выбора направления больше нет — главное меню."""
+    prepare_main_menu(chat_id)
     finish_button_reply(
         chat_id,
-        joiner_activity_hint(),
-        reply_markup=get_joiner_activity_keyboard(),
-    )
-
-
-def controller_menu_text() -> str:
-    return (
-        f"👋 <b>Меню контролёра СРО</b>\n\n"
-        f"<b>{SEARCH_ORG_BUTTON}</b> — ИНН или название по всем 15 СРО\n"
-        f"   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
-        f"<b>{NRS_LINK_BUTTON}</b> — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ\n"
-        f"<b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
-        f"<b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО (НОСТРОЙ и НОПРИЗ)\n"
-        f"❓ Бланки и документы для проверки — команда /info\n\n"
-        f"<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
-        f"{OFFICIAL_SOURCE_DISCLAIMER}"
-    )
-
-
-def open_controller_menu(chat_id: int) -> None:
-    prepare_controller_menu(chat_id)
-    clear_await_inn(chat_id)
-    clear_onboarding_flags(chat_id)
-    finish_button_reply(
-        chat_id,
-        controller_menu_text(),
-        reply_markup=get_controller_keyboard(chat_id),
+        "📋 <b>Главное меню</b> — выберите раздел на клавиатуре ниже:",
+        reply_markup=get_main_keyboard(chat_id),
     )
 
 
 def get_nrs_link_keyboard():
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(types.KeyboardButton(BACK_TO_MENU_BUTTON))
-    return keyboard
+    return get_main_keyboard()
 
 
 def get_specialist_keyboard():
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(types.KeyboardButton(BACK_TO_MENU_BUTTON))
-    return keyboard
+    return get_main_keyboard()
 
 
 def get_national_keyboard():
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(types.KeyboardButton(BACK_TO_MENU_BUTTON))
-    return keyboard
+    return get_main_keyboard()
 
 
 def open_national_search(chat_id: int) -> None:
@@ -2606,23 +2521,19 @@ def open_specialist_search(chat_id: int) -> None:
 
 
 def get_onboarding_keyboard():
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(types.KeyboardButton(SEARCH_ORG_BUTTON))
-    keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
-    keyboard.add(types.KeyboardButton(SKIP_ONBOARDING_BUTTON))
-    return keyboard
-
-
-def get_joiner_activity_keyboard():
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    for label, _sro_id in JOINER_ACTIVITY_CHOICES:
-        keyboard.add(types.KeyboardButton(label))
-    keyboard.add(types.KeyboardButton(RESTART_ORG_BUTTON))
-    return keyboard
+    """Раньше — отдельная клавиатура онбординга (с «Пропустить»). Теперь всегда главное меню."""
+    return get_main_keyboard()
 
 
 def _context_ready_text(chat_id: int) -> str:
     prof = get_user_profile(chat_id)
+    ctx = get_user_context(chat_id) or {}
+    if not prof and ctx.get("inn") and unresolved_sro_choices(chat_id):
+        return (
+            "✅ Организация найдена — она состоит в нескольких СРО (см. карточку).\n\n"
+            "📋 Бланки: /info → «📋 Проверяемые документы» — "
+            "СРО спрошу при открытии бланков."
+        )
     if not prof:
         return (
             "✅ Можно пользоваться меню.\n\n"
@@ -2646,16 +2557,10 @@ def _open_org_search(chat_id: int, *, intro: str | None = None) -> None:
         "Введите <b>ИНН</b> (только цифры) или часть названия "
         f"(минимум {NAME_SEARCH_MIN_LEN} символа) по <b>всем 15 СРО</b> экосистемы."
     )
-    kb = (
-        get_controller_keyboard(chat_id)
-        if is_controller_work_mode(chat_id)
-        else get_main_keyboard(chat_id)
-    )
-    kb.add(types.KeyboardButton(BACK_TO_MENU_BUTTON))
     finish_button_reply(
         chat_id,
         text,
-        reply_markup=kb,
+        reply_markup=get_main_keyboard(chat_id),
     )
 
 
@@ -2816,8 +2721,6 @@ def get_download_docs_keyboard(chat_id: int | None = None):
     for i in range(1, len(labels), 2):
         chunk = labels[i : i + 2]
         keyboard.add(*[types.KeyboardButton(x) for x in chunk])
-    if chat_id is not None and should_show_change_context_button(chat_id):
-        keyboard.add(types.KeyboardButton(CHANGE_CONTEXT_BUTTON))
     keyboard.add(types.KeyboardButton("❓ Назад в Полезное"))
     return keyboard
 
@@ -2853,17 +2756,15 @@ def send_welcome(message):
 @bot.message_handler(commands=['controller'])
 @log_errors
 def send_controller_command(message):
+    """Кабинета контролёра больше нет: старая команда открывает главное меню."""
     touch_user(message, event="controller")
-    if not is_controller(message.chat.id):
-        bot.send_message(
-            message.chat.id,
-            "⛔ Команда <code>/controller</code> — только для сотрудников контроля СРО.\n\n"
-            "Обычное меню: /start",
-            parse_mode="HTML",
-            reply_markup=get_main_keyboard(message.chat.id),
-        )
-        return
-    open_controller_menu(message.chat.id)
+    prepare_main_menu(message.chat.id)
+    finish_button_reply(
+        message.chat.id,
+        "📋 <b>Главное меню</b> — все разделы доступны всем, "
+        "выберите на клавиатуре ниже:",
+        reply_markup=get_main_keyboard(message.chat.id),
+    )
 
 
 def restart_org_onboarding(chat_id: int) -> None:
@@ -2876,11 +2777,10 @@ def restart_org_onboarding(chat_id: int) -> None:
     finish_button_reply(
         chat_id,
         "🔄 <b>Смена организации</b>\n\n"
-        "Введите <b>ИНН</b> другой организации — или нажмите кнопку "
-        f"«{SKIP_ONBOARDING_BUTTON}», чтобы работать с бланками без ИНН "
-        "(сначала направление, потом СРО).\n\n"
+        "Введите <b>ИНН</b> другой организации или её название. "
+        "Меню доступно и без ИНН.\n\n"
         "<i>Можно также /start — то же самое.</i>",
-        reply_markup=get_onboarding_keyboard(),
+        reply_markup=get_main_keyboard(chat_id),
     )
 
 
@@ -2909,7 +2809,7 @@ UPDATE_NOTICE_VERSION = "1.10-max"
 UPDATE_NOTICE_TEXT = """🆕 <b>Бот «Помощник СРО» теперь и в MAX</b>
 
 Тот же помощник, что в Telegram: поиск по ИНН, планы проверок, бланки, FAQ.
-Для контролёров — то же меню <code>/controller</code> (поиск, НРС, Checko).
+В меню и под карточкой организации — поиск, НРС и проверка в Checko.
 
 Открыть в MAX:
 https://max.ru/se14097229_bot
@@ -2981,7 +2881,6 @@ def send_help(message):
 
 <b>Команды</b> (кнопка Menu слева от поля ввода):
 /start — главное меню (ИНН или поиск)
-/controller — меню контролёра (служебное)
 /search — поиск организации
 /fio — поиск специалиста по ФИО
 /info — FAQ и бланки
@@ -3069,9 +2968,6 @@ def handle_text(message):
         send_welcome(message)
         return
     if nav_action == "menu":
-        if is_controller_work_mode(message.chat.id):
-            open_controller_menu(message.chat.id)
-            return
         prepare_main_menu(message.chat.id)
         bot.send_message(
             message.chat.id,
@@ -3086,19 +2982,11 @@ def handle_text(message):
     if nav_action == "info":
         send_info_command(message)
         return
-    if nav_action == "controller":
-        send_controller_command(message)
-        return
-
     if user_text == BACK_TO_MENU_BUTTON:
-        in_controller = is_controller_work_mode(message.chat.id)
         prepare_main_menu(message.chat.id)
         clear_nav_mode_flags(message.chat.id)
         cancel_await_expected(message.chat.id)
         cancel_info_list_quiz(message.chat.id)
-        if in_controller:
-            open_controller_menu(message.chat.id)
-            return
         finish_button_reply(
             message.chat.id,
             "Вы вернулись в главное меню:",
@@ -3125,17 +3013,9 @@ def handle_text(message):
     if try_nrs_text_reply(message.chat.id, user_text):
         return
 
-    activity = parse_joiner_activity_button(user_text)
-    if activity and is_awaiting_joiner_activity(message.chat.id):
-        sro_ids = begin_joiner_sro_pick(message.chat.id, activity)
-        finish_button_reply(
-            message.chat.id,
-            joiner_sro_pick_hint(activity),
-            reply_markup=get_sro_context_picker_keyboard(
-                sro_ids, show_back_to_direction=True
-            ),
-        )
-        return
+    if is_awaiting_joiner_activity(message.chat.id):
+        # Выбор направления убран; сбрасываем «зависшее» ожидание после обновления.
+        clear_joiner_activity_await(message.chat.id)
 
     picked_sro = parse_context_button(user_text)
     if picked_sro:
@@ -3156,11 +3036,13 @@ def handle_text(message):
         return
 
     if user_text == SKIP_ONBOARDING_BUTTON:
-        begin_joiner_activity_pick(message.chat.id)
+        # Старая кнопка «Пропустить»: выбора направления больше нет, просто главное меню.
+        prepare_main_menu(message.chat.id)
+        clear_await_inn(message.chat.id)
         finish_button_reply(
             message.chat.id,
-            joiner_activity_hint(),
-            reply_markup=get_joiner_activity_keyboard(),
+            "📋 <b>Главное меню</b> — выберите раздел на клавиатуре ниже:",
+            reply_markup=get_main_keyboard(message.chat.id),
         )
         return
 
@@ -3202,15 +3084,11 @@ def handle_text(message):
         return
 
     if user_text == BACK_TO_DIRECTION_BUTTON:
-        do_back_to_direction(message.chat.id)
-        return
-
-    if is_awaiting_joiner_activity(message.chat.id):
-        bot.send_message(
+        prepare_main_menu(message.chat.id)
+        finish_button_reply(
             message.chat.id,
-            "📌 Выберите направление кнопкой ниже:\n"
-            "🏗 Строители · 📐 Проектировщики · 🗺 Изыскания",
-            reply_markup=get_joiner_activity_keyboard(),
+            "📋 <b>Главное меню</b> — выберите раздел на клавиатуре ниже:",
+            reply_markup=get_main_keyboard(message.chat.id),
         )
         return
 
@@ -3224,21 +3102,19 @@ def handle_text(message):
                 reply_markup=get_main_keyboard(message.chat.id),
             ):
                 clear_await_inn(message.chat.id)
-                if not pending_sro_ids(message.chat.id):
-                    consume_open_main_after_sro(message.chat.id)
-                    finish_button_reply(
-                        message.chat.id,
-                        _context_ready_text(message.chat.id),
-                        reply_markup=get_main_keyboard(message.chat.id),
-                    )
+                consume_open_main_after_sro(message.chat.id)
+                finish_button_reply(
+                    message.chat.id,
+                    _context_ready_text(message.chat.id),
+                    reply_markup=get_main_keyboard(message.chat.id),
+                )
                 return
             bot.send_message(
                 message.chat.id,
                 "❌ Организация не найдена в реестре.\n\n"
                 "• Проверьте ИНН\n"
-                "• Если <b>только вступаете</b> — нажмите "
-                f"«{SKIP_ONBOARDING_BUTTON}» и выберите направление "
-                "(меню и бланки доступны до появления в реестре).",
+                "• Если вы <b>только вступаете</b> — меню и бланки доступны "
+                "и без ИНН: выберите раздел на клавиатуре ниже.",
                 parse_mode="HTML",
                 reply_markup=get_onboarding_keyboard(),
             )
@@ -3249,10 +3125,6 @@ def handle_text(message):
             return
         if len(user_text.strip()) >= 2 and handle_org_name_search(message.chat.id, user_text, force=True):
             clear_await_inn(message.chat.id)
-            pick_ids = pending_sro_ids(message.chat.id)
-            if pick_ids and len(pick_ids) >= 2:
-                mark_open_main_after_sro(message.chat.id)
-                return
             enter_search_mode(message.chat.id)
             consume_open_main_after_sro(message.chat.id)
             finish_button_reply(
@@ -3264,8 +3136,7 @@ def handle_text(message):
         bot.send_message(
             message.chat.id,
             "📌 Введите <b>ИНН</b> или название организации — "
-            f"или нажмите <b>{SEARCH_ORG_BUTTON}</b> / "
-            f"<b>{SKIP_ONBOARDING_BUTTON}</b>.",
+            f"или выберите раздел в меню (<b>{SEARCH_ORG_BUTTON}</b>).",
             parse_mode="HTML",
             reply_markup=get_onboarding_keyboard(),
         )
@@ -3577,6 +3448,9 @@ def handle_text(message):
             _download_docs_intro(message.chat.id),
             reply_markup=get_download_docs_keyboard(message.chat.id),
         )
+        _choices = cached_pickable_sro_ids(message.chat.id)
+        if _choices:
+            send_blanki_sro_choice(message.chat.id, _choices)
         return
 
     elif "Требования к специалистам" in user_text:
@@ -3824,7 +3698,7 @@ def handle_info_list_quiz_callback(call):
             safe_answer_callback(call.id, "Нет доступа")
             bot.send_message(
                 chat_id,
-                "⛔ Заполнение инфолиста вопросами — только для админов и контролёров.",
+                "⛔ Заполнение инфолиста вопросами сейчас недоступно.",
             )
             return
         if action == "empty":
@@ -3975,12 +3849,6 @@ def _start_checko_section(chat_id: int, inn: str, section: str, *, kind: str) ->
 @log_errors
 def handle_checko_callbacks(call):
     chat_id = call.message.chat.id
-    if not can_use_checko(chat_id):
-        safe_answer_callback(
-            call.id,
-            "Checko — в /controller",
-        )
-        return
     parts = (call.data or "").split(":")
     # chk:r:INN | chk:f:INN | chk:s:SECTION:INN
     if len(parts) < 3:
@@ -4107,8 +3975,43 @@ def handle_inline_search(call):
     else:
         safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
+
+@bot.callback_query_handler(func=lambda call: (call.data or "").startswith("ctxset:"))
+@log_errors
+def handle_ctxset_callbacks(call):
+    """Выбор СРО для бланков (inline) — только при открытии бланков.
+    ctxset:<sro_id>[:<ключ бланка>]"""
+    chat_id = call.message.chat.id
+    parts = (call.data or "").split(":")
+    sro_id = parts[1] if len(parts) > 1 else ""
+    key = parts[2] if len(parts) > 2 else ""
+    if not get_sro_profile(sro_id):
+        safe_answer_callback(call.id, "СРО не найдено")
+        return
+    safe_answer_callback(call.id)
+    prev = get_user_context(chat_id)
+    set_user_sro(chat_id, sro_id, inn=(prev or {}).get("inn"))
+    try:
+        bot.delete_message(chat_id, call.message.message_id)
+    except Exception:
+        pass
+    prof = get_sro_profile(sro_id)
+    if key:
+        label = next((lbl for k, lbl, _cap in BLANKI_MENU_ITEMS if k == key), None)
+        if label:
+            handle_blanki_menu_text(chat_id, label, folder_path)
+            return
+    act = ACTIVITY_LABEL.get(prof["activity"], "") if prof else ""
+    title = prof["short_title"] if prof else sro_id
+    finish_button_reply(
+        chat_id,
+        f"✅ Бланки: <b>{title}</b> ({act}).\n\nВыберите документ в перечне ниже.",
+        reply_markup=get_download_docs_keyboard(chat_id),
+    )
+
+
 if __name__ == "__main__":
-    BOT_VERSION = "1.14.9"
+    BOT_VERSION = "1.14.10"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 

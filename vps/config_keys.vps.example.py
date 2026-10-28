@@ -6,6 +6,6 @@ SRO_FILES_DIR = "/opt/sro-bot/sro_data"
 
 # MAX messenger (не заливать с Windows — править на VPS)
 MAX_BOT_TOKEN = ""
-# user_id контролёров в MAX (не Telegram chat_id)
+# user_id в MAX (устарело, ни на что не влияет; не Telegram chat_id)
 MAX_CONTROLLER_IDS = []
 

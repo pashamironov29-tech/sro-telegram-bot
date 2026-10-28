@@ -89,16 +89,13 @@ def test_menu_payload_opens_screen(max_bot, payload, needle):
     assert needle.lower() in max_bot.blob().lower()
 
 
-def test_menu_controller_for_controller(max_bot, max_controller):
-    max_bot.m.handle_callback(max_controller, "menu:controller", {})
-    assert "Меню контролёра" in max_bot.blob()
-
-
-def test_menu_controller_refused_for_member(max_bot):
+def test_menu_controller_payload_opens_main_menu(max_bot):
+    """Старая кнопка «Меню контролёра» больше не ведёт в отдельный кабинет."""
     max_bot.m.handle_callback(UID, "menu:controller", {})
     blob = max_bot.blob()
-    assert "только для сотрудников контроля СРО" in blob
     assert "Меню контролёра" not in blob
+    assert "только для сотрудников" not in blob
+    assert max_bot.callback_payloads() == ["menu:search", "menu:nrs", "menu:spec", "menu:nat"]
 
 
 def test_nok_keyboard_buttons(max_bot):
@@ -152,35 +149,37 @@ def test_checko_keyboard_has_each_section_once(max_bot):
 
 
 @pytest.fixture
-def checko_controller(max_bot, max_controller, monkeypatch):
-    """Контролёр в кабинете, Checko подменён: в сеть не ходим."""
+def checko_user(max_bot, monkeypatch):
+    """Обычный пользователь, Checko подменён: в сеть не ходим."""
     monkeypatch.setattr(
         max_bot.m,
         "format_checko_section",
         lambda section, inn: f"CHECKO_SECTION={section}|INN={inn}",
     )
-    max_bot.m.handle_text(max_controller, "/controller", {})
     max_bot.clear()
-    return max_controller
+    return UID
 
 
 @pytest.mark.parametrize(("code", "label"), [(c, label) for c, label, _m in CHECKO_SECTIONS])
-def test_checko_section_button_opens_section(max_bot, checko_controller, code, label):
-    max_bot.m.handle_checko(checko_controller, f"chk:s:{code}:{CHECKO_INN}")
+def test_checko_section_button_opens_section(max_bot, checko_user, code, label):
+    max_bot.m.handle_checko(checko_user, f"chk:s:{code}:{CHECKO_INN}")
 
     blob = max_bot.blob()
     assert f"CHECKO_SECTION={code}" in blob, label
     assert f"INN={CHECKO_INN}" in blob
 
 
-def test_checko_full_info_opens_general(max_bot, checko_controller):
-    max_bot.m.handle_checko(checko_controller, f"chk:f:{CHECKO_INN}")
+def test_checko_full_info_opens_general(max_bot, checko_user):
+    max_bot.m.handle_checko(checko_user, f"chk:f:{CHECKO_INN}")
     assert "CHECKO_SECTION=general" in max_bot.blob()
 
 
-def test_checko_refused_outside_controller(max_bot):
-    max_bot.m.handle_checko(UID, f"chk:s:general:{CHECKO_INN}")
-    assert "Checko доступен в /controller" in max_bot.blob()
+def test_checko_available_to_every_user(max_bot, checko_user):
+    """Checko не привязан к /controller: любой пользователь открывает разделы."""
+    max_bot.m.handle_checko(checko_user, f"chk:s:general:{CHECKO_INN}")
+    blob = max_bot.blob()
+    assert "CHECKO_SECTION=general" in blob
+    assert "/controller" not in blob
 
 
 def test_command_start(max_bot):
@@ -216,11 +215,9 @@ def test_command_info(max_bot):
     assert "Полезная информация" in max_bot.blob()
 
 
-def test_command_controller_for_controller(max_bot, max_controller):
-    max_bot.m.handle_text(max_controller, "/controller", {})
-    assert "контролёр" in max_bot.blob().lower()
-
-
-def test_command_controller_refused_for_member(max_bot):
+def test_command_controller_opens_main_menu(max_bot):
     max_bot.m.handle_text(UID, "/controller", {})
-    assert "только для сотрудников контроля СРО" in max_bot.blob()
+    blob = max_bot.blob()
+    assert "только для сотрудников" not in blob
+    assert "Меню контролёра" not in blob
+    assert max_bot.callback_payloads() == ["menu:search", "menu:nrs", "menu:spec", "menu:nat"]
