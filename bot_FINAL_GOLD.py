@@ -150,13 +150,11 @@ from users_log import db_path, format_users_report, is_bot_admin, touch_user, us
 import national_reestr
 from national_reestr import (
     CARD_FAIL,
-    NATIONAL_BUTTON,
     error_result,
     format_intro as format_national_intro,
     is_national_mode,
 )
 from nrs_search_links import (
-    NRS_LINK_BUTTON,
     can_use_nrs_link_pilot,
     enter_nrs_link_mode,
     exit_nrs_link_mode,
@@ -166,31 +164,19 @@ from nrs_search_links import (
     looks_like_nrs_person_query,
 )
 from specialist_reestr import (
-    SPECIALIST_BUTTON,
     format_search_reply,
     format_specialist_intro,
     is_specialist_mode,
 )
-# --- Главное меню: 4 крупные кнопки (Telegram) --------------------------------
-# Старые подписи оставлены как алиасы: у пользователей может висеть старая
-# клавиатура, и её кнопки должны продолжать работать.
-_LEGACY_MENU_ALIASES = {
-    "🔍 Поиск организации": "🔎 Поиск организации в СРО",
-    NRS_LINK_BUTTON: "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)",
-    "👤 НРС ссылка (пилот)": "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)",
-    SPECIALIST_BUTTON: "👤 Где работает специалист (по ФИО)",
-    NATIONAL_BUTTON: "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ",
-}
-SEARCH_ORG_BUTTON = "🔎 Поиск организации в СРО"
-NRS_LINK_BUTTON = "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)"
-SPECIALIST_BUTTON = "👤 Где работает специалист (по ФИО)"
-NATIONAL_BUTTON = "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ"
-
-
-def normalize_menu_label(text: str) -> str:
-    """Старая подпись кнопки меню -> новая. Остальной текст без изменений."""
-    return _LEGACY_MENU_ALIASES.get(text, text)
-
+# Главное меню: 4 крупные кнопки. Подписи и алиасы старых — в menu_labels.py.
+from menu_labels import (  # noqa: E402
+    LEGACY_MENU_ALIASES as _LEGACY_MENU_ALIASES,
+    NATIONAL_BUTTON,
+    NRS_LINK_BUTTON,
+    SEARCH_ORG_BUTTON,
+    SPECIALIST_BUTTON,
+    normalize_menu_label,
+)
 
 from voprosy_faq import (
     format_voprosy_faq_response,
@@ -4122,7 +4108,7 @@ def handle_inline_search(call):
         safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.14.8"
+    BOT_VERSION = "1.14.9"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 

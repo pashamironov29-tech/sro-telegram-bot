@@ -75,15 +75,20 @@ from bot_core import (
     prepare_specialist,
     prepare_welcome_reset,
 )
+from menu_labels import (
+    NATIONAL_BUTTON,
+    NRS_LINK_BUTTON,
+    SEARCH_ORG_BUTTON,
+    SPECIALIST_BUTTON,
+    normalize_menu_label,
+)
 import national_reestr
 from national_reestr import (
     CARD_FAIL,
-    NATIONAL_BUTTON,
     error_result,
     format_intro as format_national_intro,
 )
 from nrs_search_links import (
-    NRS_LINK_BUTTON,
     enter_nrs_link_mode,
     exit_nrs_link_mode,
     format_nrs_link_intro,
@@ -92,7 +97,6 @@ from nrs_search_links import (
     nrs_registry_link_buttons,
 )
 from specialist_reestr import (
-    SPECIALIST_BUTTON,
     format_search_reply,
     format_specialist_intro,
 )
@@ -168,7 +172,7 @@ install_secret_log_redaction(
 )
 
 SRO_SITE = "https://www.srogen.ru"
-SEARCH_ORG = "🔍 Поиск организации"
+SEARCH_ORG = SEARCH_ORG_BUTTON
 BACK_MENU = "⬅️ Назад в меню"
 NAME_SEARCH_MIN_LEN = 4
 NAME_SEARCH_LIST_MAX = 10
@@ -179,7 +183,7 @@ CARD_LOADING_TEXT = (
     "<i>Загружаю проверки с сайта СРО. Обычно 5–15 секунд. "
     "Пожалуйста, подождите — не нажимайте кнопки повторно.</i>"
 )
-HELP_TEXT = """ℹ️ <b>Справка — Помощник СРО</b>
+HELP_TEXT = f"""ℹ️ <b>Справка — Помощник СРО</b>
 
 <b>Кто это:</b> сервис для членов строительных СРО (15 партнёров): реестр, проверки, бланки, FAQ.
 
@@ -193,11 +197,12 @@ HELP_TEXT = """ℹ️ <b>Справка — Помощник СРО</b>
 
 В MAX кнопки — <b>под сообщениями</b>, не внизу экрана как в Telegram.
 
-<b>Начало:</b> напишите <b>ИНН</b> или нажмите «Поиск организации» под приветствием.
+<b>Начало:</b> напишите <b>ИНН</b> или нажмите «{SEARCH_ORG}» под приветствием.
 
-🔍 Поиск — ИНН или часть названия по 15 СРО
-🔎 Поиск специалиста по ФИО — организация, где человек указан в НРС
-🏛 Поиск в НОСТРОЙ / НОПРИЗ — ИНН, ОГРН или название во всех СРО
+{SEARCH_ORG} — ИНН или часть названия по 15 СРО
+{NRS_LINK_BUTTON} — ФИО или номер в НОСТРОЙ / НОПРИЗ
+{SPECIALIST_BUTTON} — организация, где человек указан в НРС
+{NATIONAL_BUTTON} — ИНН, ОГРН или название во всех СРО
 /info — FAQ и бланки
 Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
 
@@ -233,10 +238,8 @@ def main_keyboard(user_id: int) -> list[dict]:
     if is_controller_work_mode(user_id):
         return controller_keyboard(user_id)
     return kb(
-        row(
-            callback_button(SEARCH_ORG, "menu:search"),
-            callback_button(NRS_LINK_BUTTON, "menu:nrs"),
-        ),
+        row(callback_button(SEARCH_ORG, "menu:search")),
+        row(callback_button(NRS_LINK_BUTTON, "menu:nrs")),
         row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
         row(callback_button(NATIONAL_BUTTON, "menu:nat")),
     )
@@ -244,10 +247,8 @@ def main_keyboard(user_id: int) -> list[dict]:
 
 def controller_keyboard(user_id: int | None = None) -> list[dict]:
     return kb(
-        row(
-            callback_button(SEARCH_ORG, "menu:search"),
-            callback_button(NRS_LINK_BUTTON, "menu:nrs"),
-        ),
+        row(callback_button(SEARCH_ORG, "menu:search")),
+        row(callback_button(NRS_LINK_BUTTON, "menu:nrs")),
         row(callback_button(SPECIALIST_BUTTON, "menu:spec")),
         row(callback_button(NATIONAL_BUTTON, "menu:nat")),
     )
@@ -256,11 +257,11 @@ def controller_keyboard(user_id: int | None = None) -> list[dict]:
 def controller_menu_text() -> str:
     return (
         "👋 <b>Меню контролёра СРО</b>\n\n"
-        f"🔍 <b>{SEARCH_ORG}</b> — ИНН или название по всем 15 СРО\n"
+        f"<b>{SEARCH_ORG}</b> — ИНН или название по всем 15 СРО\n"
         "   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
-        f"👤 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ\n"
-        f"🔎 <b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
-        f"🏛 <b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО (НОСТРОЙ и НОПРИЗ)\n"
+        f"<b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ\n"
+        f"<b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
+        f"<b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО (НОСТРОЙ и НОПРИЗ)\n"
         "❓ Бланки и документы для проверки — команда /info\n\n"
         "<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
         f"{OFFICIAL_SOURCE_DISCLAIMER}"
@@ -725,7 +726,7 @@ def context_ready_text(user_id: int) -> str:
         return (
             "✅ Можно пользоваться меню.\n\n"
             "Чтобы бланки и план проверок были <b>вашего</b> СРО — "
-            "введите ИНН через «🔍 Поиск организации»."
+            f"введите ИНН через «{SEARCH_ORG}»."
         )
     act = ACTIVITY_LABEL.get(prof["activity"], "")
     return (
@@ -1186,6 +1187,20 @@ def handle_text(user_id: int, user_text: str, update: dict) -> None:
         return
     if low in ("/menu", "меню", "menu") or user_text == BACK_MENU:
         open_main(user_id)
+        return
+
+    label = normalize_menu_label(user_text.strip())
+    if label == SEARCH_ORG_BUTTON:
+        open_search(user_id)
+        return
+    if label == NRS_LINK_BUTTON:
+        open_nrs(user_id)
+        return
+    if label == SPECIALIST_BUTTON:
+        open_specialist(user_id)
+        return
+    if label == NATIONAL_BUTTON:
+        open_national(user_id)
         return
 
     mode = active_input_mode(user_id)
