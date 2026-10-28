@@ -171,6 +171,27 @@ from specialist_reestr import (
     format_specialist_intro,
     is_specialist_mode,
 )
+# --- Главное меню: 4 крупные кнопки (Telegram) --------------------------------
+# Старые подписи оставлены как алиасы: у пользователей может висеть старая
+# клавиатура, и её кнопки должны продолжать работать.
+_LEGACY_MENU_ALIASES = {
+    "🔍 Поиск организации": "🔎 Поиск организации в СРО",
+    NRS_LINK_BUTTON: "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)",
+    "👤 НРС ссылка (пилот)": "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)",
+    SPECIALIST_BUTTON: "👤 Где работает специалист (по ФИО)",
+    NATIONAL_BUTTON: "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ",
+}
+SEARCH_ORG_BUTTON = "🔎 Поиск организации в СРО"
+NRS_LINK_BUTTON = "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)"
+SPECIALIST_BUTTON = "👤 Где работает специалист (по ФИО)"
+NATIONAL_BUTTON = "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ"
+
+
+def normalize_menu_label(text: str) -> str:
+    """Старая подпись кнопки меню -> новая. Остальной текст без изменений."""
+    return _LEGACY_MENU_ALIASES.get(text, text)
+
+
 from voprosy_faq import (
     format_voprosy_faq_response,
     get_voprosy_site_item,
@@ -2121,6 +2142,7 @@ def _feedback_text_is_navigation(user_text: str) -> bool:
 
 def _is_reply_menu_button(user_text: str) -> bool:
     """Текст reply-кнопки меню — не запрос НРС."""
+    user_text = normalize_menu_label(user_text)
     if user_text in (
         BACK_TO_MENU_BUTTON,
         SEARCH_ORG_BUTTON,
@@ -2348,7 +2370,6 @@ def resolve_navigation_command(text: str) -> str | None:
 
 # Телефонный справочник отключён (конфликтовал с НРС и поиском).
 
-SEARCH_ORG_BUTTON = "🔍 Поиск организации"
 BACK_TO_MENU_BUTTON = "⬅️ Назад в меню"
 
 
@@ -2356,9 +2377,8 @@ BACK_TO_MENU_BUTTON = "⬅️ Назад в меню"
 def get_controller_keyboard(chat_id: int | None = None):
     """Меню контролёров: поиск и НРС — первыми, без кнопок вступающих."""
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn_search = types.KeyboardButton(SEARCH_ORG_BUTTON)
-    btn_nrs = types.KeyboardButton(NRS_LINK_BUTTON)
-    keyboard.add(btn_search, btn_nrs)
+    keyboard.add(types.KeyboardButton(SEARCH_ORG_BUTTON))
+    keyboard.add(types.KeyboardButton(NRS_LINK_BUTTON))
     keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
     keyboard.add(types.KeyboardButton(NATIONAL_BUTTON))
     return keyboard
@@ -2372,13 +2392,10 @@ def get_main_keyboard(chat_id: int | None = None):
     смена контекста — с экрана бланков.
     """
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn_search = types.KeyboardButton(SEARCH_ORG_BUTTON)
-    btn_nrs = types.KeyboardButton(NRS_LINK_BUTTON)
+    keyboard.add(types.KeyboardButton(SEARCH_ORG_BUTTON))
     show_nrs = chat_id is None or can_use_nrs_link_pilot(chat_id, get_user_sro_id(chat_id))
     if show_nrs:
-        keyboard.add(btn_search, btn_nrs)
-    else:
-        keyboard.add(btn_search)
+        keyboard.add(types.KeyboardButton(NRS_LINK_BUTTON))
     keyboard.add(types.KeyboardButton(SPECIALIST_BUTTON))
     keyboard.add(types.KeyboardButton(NATIONAL_BUTTON))
     return keyboard
@@ -2460,11 +2477,11 @@ def do_back_to_direction(chat_id: int) -> None:
 def controller_menu_text() -> str:
     return (
         f"👋 <b>Меню контролёра СРО</b>\n\n"
-        f"🔍 <b>{SEARCH_ORG_BUTTON}</b> — ИНН или название по всем 15 СРО\n"
+        f"<b>{SEARCH_ORG_BUTTON}</b> — ИНН или название по всем 15 СРО\n"
         f"   └ после поиска: реестр СРО или <b>полная информация</b> (Checko)\n"
-        f"👤 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ\n"
-        f"🔎 <b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
-        f"🏛 <b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО (НОСТРОЙ и НОПРИЗ)\n"
+        f"<b>{NRS_LINK_BUTTON}</b> — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ\n"
+        f"<b>{SPECIALIST_BUTTON}</b> — в какой организации работает специалист НРС\n"
+        f"<b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО (НОСТРОЙ и НОПРИЗ)\n"
         f"❓ Бланки и документы для проверки — команда /info\n\n"
         f"<i>Обычное меню члена СРО — /start (без Checko).</i>\n\n"
         f"{OFFICIAL_SOURCE_DISCLAIMER}"
@@ -2624,7 +2641,7 @@ def _context_ready_text(chat_id: int) -> str:
         return (
             "✅ Можно пользоваться меню.\n\n"
             "Чтобы бланки и план проверок были <b>вашего</b> СРО — "
-            "введите ИНН через «🔍 Поиск организации»."
+            f"введите ИНН через «{SEARCH_ORG_BUTTON}»."
         )
     act = ACTIVITY_LABEL.get(prof["activity"], "")
     return (
@@ -2985,9 +3002,9 @@ def send_help(message):
 /help — эта справка
 
 <b>Основные разделы на клавиатуре:</b>
-🔍 Поиск организации — ИНН или название, план проверки и реестр
-👤 Проверить в НРС — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ
-🔎 Поиск специалиста по ФИО — организация, где человек указан в НРС
+{SEARCH_ORG_BUTTON} — ИНН или название, план проверки и реестр
+{NRS_LINK_BUTTON} — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ
+{SPECIALIST_BUTTON} — организация, где человек указан в НРС
 {NATIONAL_BUTTON} — организация по ИНН, ОГРН или названию в едином реестре всех СРО
 /info — выписка, НОК, изменения в реестре, FAQ и бланки
 Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
@@ -3036,7 +3053,7 @@ def send_info_command(message):
 @log_errors
 def handle_text(message):
     touch_user(message, event="message")
-    user_text = message.text.strip()
+    user_text = normalize_menu_label(message.text.strip())
 
     if is_awaiting_expected(message.chat.id):
         if user_text.lower() in ("/skip", "skip", "пропустить"):
@@ -4105,7 +4122,7 @@ def handle_inline_search(call):
         safe_answer_callback(call.id, "❌ Данные организации устарели, попробуйте еще раз.")
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.14.7"
+    BOT_VERSION = "1.14.8"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 
