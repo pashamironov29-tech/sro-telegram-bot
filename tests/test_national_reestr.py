@@ -434,16 +434,16 @@ def test_tg_menu_has_button_and_handles_query(monkeypatch):
     for row in bot_FINAL_GOLD.get_main_keyboard(chat_id).keyboard:
         for button in row:
             labels.append(button["text"] if isinstance(button, dict) else button.text)
-    assert national_reestr.NATIONAL_BUTTON in labels
+    assert bot_FINAL_GOLD.NATIONAL_BUTTON in labels
     ctrl_labels = []
     for row in bot_FINAL_GOLD.get_controller_keyboard(chat_id).keyboard:
         for button in row:
             ctrl_labels.append(button["text"] if isinstance(button, dict) else button.text)
-    assert national_reestr.NATIONAL_BUTTON in ctrl_labels
+    assert bot_FINAL_GOLD.NATIONAL_BUTTON in ctrl_labels
 
     bot_FINAL_GOLD.handle_text(
         types.SimpleNamespace(
-            text=national_reestr.NATIONAL_BUTTON,
+            text=bot_FINAL_GOLD.NATIONAL_BUTTON,
             chat=types.SimpleNamespace(id=chat_id),
             from_user=types.SimpleNamespace(id=chat_id, first_name="Т", last_name="", username="u"),
         )

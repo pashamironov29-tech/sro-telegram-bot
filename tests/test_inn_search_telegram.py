@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from specialist_reestr import SPECIALIST_BUTTON
+SPECIALIST_BUTTON = "👤 Где работает специалист (по ФИО)"
 from tests.support import FAKE_TG_TOKEN, INN_ABSENT, ROOT
 
 PROBE = ROOT / "tests" / "tg_search_probe.py"
