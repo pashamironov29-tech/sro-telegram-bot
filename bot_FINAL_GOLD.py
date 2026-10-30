@@ -4011,7 +4011,7 @@ def handle_ctxset_callbacks(call):
 
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.14.10"
+    BOT_VERSION = "1.14.11"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 
