@@ -191,6 +191,7 @@ def test_command_start(max_bot):
     assert "ИНН или название по всем 15 СРО" in blob
     assert "ФИО или номер в НОСТРОЙ / НОПРИЗ" in blob
     assert "в какой организации указан" in blob
+    assert "поиск по ФИО" in blob
     assert "во всех СРО, не только у 15 партнёров" in blob
     assert "775-81-11" in blob
     assert "Пропустить" not in blob
