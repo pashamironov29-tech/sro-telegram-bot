@@ -2741,7 +2741,7 @@ def send_welcome(message):
 
 <b>{SEARCH_ORG_BUTTON}</b> — ИНН или название по всем 15 СРО
 <b>{NRS_LINK_BUTTON}</b> — ФИО или номер в НОСТРОЙ / НОПРИЗ
-<b>{SPECIALIST_BUTTON}</b> — в какой организации указан
+<b>{SPECIALIST_BUTTON}</b> — поиск по ФИО, в какой организации указан
 <b>{NATIONAL_BUTTON}</b> — ИНН, ОГРН или название во всех СРО, не только у 15 партнёров
 
 {OFFICIAL_SOURCE_DISCLAIMER}"""
@@ -2889,7 +2889,7 @@ def send_help(message):
 <b>Основные разделы на клавиатуре:</b>
 {SEARCH_ORG_BUTTON} — ИНН или название, план проверки и реестр
 {NRS_LINK_BUTTON} — ФИО или номер в реестрах НОСТРОЙ / НОПРИЗ
-{SPECIALIST_BUTTON} — организация, где человек указан в НРС
+{SPECIALIST_BUTTON} — поиск по ФИО: организация, где человек указан в НРС
 {NATIONAL_BUTTON} — организация по ИНН, ОГРН или названию в едином реестре всех СРО
 /info — выписка, НОК, изменения в реестре, FAQ и бланки
 Вопрос своими словами — раздел сайта, «Вопрос-ответ» или страница партнёра
@@ -4011,7 +4011,7 @@ def handle_ctxset_callbacks(call):
 
 
 if __name__ == "__main__":
-    BOT_VERSION = "1.14.11"
+    BOT_VERSION = "1.14.12"
     setup_bot_commands()
     from prevent_sleep import install_for_bot
 

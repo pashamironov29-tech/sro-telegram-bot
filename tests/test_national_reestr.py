@@ -715,6 +715,8 @@ def test_help_and_welcome_mention_button(monkeypatch):
     )
     bot_FINAL_GOLD.send_help(message)
     assert "едином реестре всех СРО" in sent[-1]
+    assert "поиск по ФИО" in sent[-1]
     sent.clear()
     bot_FINAL_GOLD.send_welcome(message)
     assert "во всех СРО, не только у 15 партнёров" in sent[-1]
+    assert "поиск по ФИО" in sent[-1]

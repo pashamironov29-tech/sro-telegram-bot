@@ -10,7 +10,7 @@ from tests.support import TEST_UID, keyboard_buttons
 NEW_LABELS = [
     "🔎 Поиск организации в СРО / Checko",
     "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)",
-    "👤 Где работает специалист (по ФИО) — с сайта НОСТРОЙ/НОПРИЗ",
+    "👤 Где работает специалист (НОСТРОЙ/НОПРИЗ)",
     "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ",
 ]
 PAYLOADS = ["menu:search", "menu:nrs", "menu:spec", "menu:nat"]

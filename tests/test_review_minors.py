@@ -116,6 +116,7 @@ def test_max_menu_and_help_are_not_welcome(max_bot):
     max_bot.m.handle_text(TEST_UID, "help", {})
     blob = max_bot.blob()
     assert "Справка — Помощник СРО" in blob
+    assert "поиск по ФИО" in blob
     assert "С чего начать" not in blob
 
 
