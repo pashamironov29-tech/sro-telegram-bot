@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-SPECIALIST_BUTTON = "👤 Где работает специалист (по ФИО)"
+SPECIALIST_BUTTON = "👤 Где работает специалист (по ФИО) — с сайта НОСТРОЙ/НОПРИЗ"
 from tests.support import FAKE_TG_TOKEN, INN_ABSENT, ROOT
 
 PROBE = ROOT / "tests" / "tg_search_probe.py"
@@ -79,7 +79,7 @@ def test_tg_short_query(tg_results):
 MAIN_LABELS = [
     "🔎 Поиск организации в СРО / Checko",
     "✅ Проверить НРС (НОСТРОЙ / НОПРИЗ)",
-    "👤 Где работает специалист (по ФИО)",
+    "👤 Где работает специалист (по ФИО) — с сайта НОСТРОЙ/НОПРИЗ",
     "🏢 Поиск организации в НОСТРОЙ / НОПРИЗ",
 ]
 OLD_TEXTS = (

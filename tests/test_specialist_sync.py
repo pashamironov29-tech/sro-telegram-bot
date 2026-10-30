@@ -524,7 +524,7 @@ def test_max_member_searches_by_fio(max_bot):
 
     _seed_one(db_path())
     labels = [text for _kind, text, _payload in keyboard_buttons(max_bot.m.main_keyboard(TEST_UID))]
-    assert "👤 Где работает специалист (по ФИО)" in labels
+    assert "👤 Где работает специалист (по ФИО) — с сайта НОСТРОЙ/НОПРИЗ" in labels
 
     max_bot.m.handle_callback(TEST_UID, "menu:spec", {})
     assert "ФИО" in max_bot.blob()
